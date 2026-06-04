@@ -261,6 +261,7 @@ export const modernSettings = new ModernSettings()
             transformer: String,
         },
     })
+    .addProperty('serverSideDownloads', true)
     .addProperty('writeArtistsSeparately', false)
     .finalize() as ModernSettings & {
     /** The last used directory handle for bulk downloads */
@@ -287,6 +288,9 @@ export const modernSettings = new ModernSettings()
 
     /** Filename template for downloads */
     filenameTemplate: string;
+
+    /** Whether web downloads should queue through the server-side download API */
+    serverSideDownloads: boolean;
 
     /** Whether to write multiple artists to downloaded files */
     writeArtistsSeparately: boolean;

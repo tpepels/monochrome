@@ -26,14 +26,25 @@ COPY . .
 # Build the project
 RUN bun run build
 
-# Serve with nginx
-FROM nginx:1.28.2-alpine
+# Serve built static assets and server-side download APIs with Bun
+FROM oven/bun:1.3.11-alpine
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN apk add --no-cache bash curl wget ffmpeg
 
-# Expose the nginx port
+ENV NODE_ENV=production
+ENV PORT=4173
+ENV MONOCHROME_STATIC_ROOT=/app/dist
+
+COPY --from=builder /app/package.json /app/bun.lock ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/server ./server
+COPY --from=builder /app/functions ./functions
+COPY --from=builder /app/js ./js
+
+# Expose the app/API port
 EXPOSE 4173
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["bun", "server/app.js"]

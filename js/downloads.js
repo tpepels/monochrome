@@ -27,6 +27,252 @@ const bulkDownloadTasks = new Map();
 const ongoingDownloads = new Set();
 let downloadNotificationContainer = null;
 
+const SERVER_DOWNLOAD_API = '/api/downloads';
+const SERVER_DOWNLOAD_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const SERVER_DOWNLOAD_UNSUPPORTED_STATUSES = new Set([404, 405, 501]);
+const SERVER_DOWNLOAD_POLL_INTERVAL_MS = 1500;
+
+function isServerDownloadsEnabled() {
+    return modernSettings.serverSideDownloads !== false;
+}
+
+function createServerDownloadsUnavailableError(message = 'Server-side downloads are unavailable') {
+    const error = new Error(message);
+    error.serverDownloadsUnavailable = true;
+    return error;
+}
+
+async function queueServerDownload(payload, { signal } = {}) {
+    let response;
+    try {
+        response = await fetch(SERVER_DOWNLOAD_API, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+            signal,
+        });
+    } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        throw createServerDownloadsUnavailableError(error?.message);
+    }
+
+    if (SERVER_DOWNLOAD_UNSUPPORTED_STATUSES.has(response.status)) {
+        throw createServerDownloadsUnavailableError();
+    }
+
+    let body = null;
+    try {
+        body = await response.json();
+    } catch {
+        // keep body null
+    }
+
+    if (!response.ok || !body?.success) {
+        throw new Error(body?.error || `Server download request failed: ${response.status}`);
+    }
+
+    return body;
+}
+
+async function fetchServerDownloadJob(jobId, { signal } = {}) {
+    const response = await fetch(`${SERVER_DOWNLOAD_API}/${encodeURIComponent(jobId)}`, {
+        signal,
+        headers: {
+            accept: 'application/json',
+        },
+    });
+
+    if (SERVER_DOWNLOAD_UNSUPPORTED_STATUSES.has(response.status)) {
+        throw createServerDownloadsUnavailableError();
+    }
+
+    const body = await response.json();
+    if (!response.ok || !body?.success) {
+        throw new Error(body?.error || `Server download status failed: ${response.status}`);
+    }
+    return body.job;
+}
+
+async function cancelServerDownload(jobId) {
+    const response = await fetch(`${SERVER_DOWNLOAD_API}/${encodeURIComponent(jobId)}/cancel`, {
+        method: 'POST',
+        headers: {
+            accept: 'application/json',
+        },
+    });
+
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.success) {
+        throw new Error(body?.error || `Server download cancel failed: ${response.status}`);
+    }
+    return body.job;
+}
+
+function delayMs(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+
+        const timeout = setTimeout(resolve, ms);
+        signal?.addEventListener(
+            'abort',
+            () => {
+                clearTimeout(timeout);
+                reject(new DOMException('Aborted', 'AbortError'));
+            },
+            { once: true }
+        );
+    });
+}
+
+async function pollServerDownloadJob(jobId, { signal, onUpdate }) {
+    while (!signal?.aborted) {
+        const job = await fetchServerDownloadJob(jobId, { signal });
+        onUpdate?.(job);
+
+        if (SERVER_DOWNLOAD_TERMINAL_STATUSES.has(job.status)) {
+            return job;
+        }
+
+        await delayMs(SERVER_DOWNLOAD_POLL_INTERVAL_MS, signal);
+    }
+
+    throw new DOMException('Aborted', 'AbortError');
+}
+
+function serverJobStatusText(job) {
+    if (job.error) return job.error;
+    switch (job.status) {
+        case 'queued':
+            return 'Queued on server';
+        case 'processing':
+            return job.progress?.message || 'Processing on server';
+        case 'paused':
+            return 'Paused on server';
+        case 'completed':
+            return 'Server download complete';
+        case 'cancelled':
+            return 'Server download cancelled';
+        case 'failed':
+            return job.failureCode || 'Server download failed';
+        default:
+            return job.progress?.message || `Server job: ${job.status}`;
+    }
+}
+
+function attachServerCancel(button, jobId) {
+    button?.addEventListener(
+        'click',
+        () => {
+            cancelServerDownload(jobId).catch((error) => {
+                console.warn('Failed to cancel server download:', error);
+            });
+        },
+        { once: true }
+    );
+}
+
+function updateServerBulkDownloadProgress(notifEl, job) {
+    const progressFill = notifEl.querySelector('.download-progress-fill');
+    const statusEl = notifEl.querySelector('.download-status');
+    if (!progressFill || !statusEl) return;
+
+    const percent = Math.max(0, Math.min(100, Number(job.progress?.percent) || 0));
+    progressFill.style.width = `${percent}%`;
+    progressFill.style.background = 'var(--highlight)';
+    statusEl.textContent = serverJobStatusText(job);
+}
+
+async function tryQueueServerTrackDownload(track, quality, api) {
+    if (!isServerDownloadsEnabled() || !track?.id) return false;
+
+    const downloadKey = `server-track-${track.id}`;
+    if (ongoingDownloads.has(downloadKey)) {
+        showNotification('This track is already queued on the server');
+        return true;
+    }
+
+    const controller = new AbortController();
+    const body = await queueServerDownload(
+        {
+            type: 'track',
+            id: track.id,
+            quality,
+        },
+        { signal: controller.signal }
+    );
+
+    ongoingDownloads.add(downloadKey);
+    const { taskEl } = addDownloadTask(track.id, track, null, api, controller);
+    attachServerCancel(taskEl.querySelector('.download-cancel'), body.jobId);
+    updateDownloadProgress(track.id, { message: 'Queued on server' });
+
+    pollServerDownloadJob(body.jobId, {
+        signal: controller.signal,
+        onUpdate: (job) => {
+            if (job.status === 'completed') {
+                completeDownloadTask(track.id, true, serverJobStatusText(job));
+            } else if (job.status === 'failed' || job.status === 'cancelled') {
+                completeDownloadTask(track.id, false, serverJobStatusText(job));
+            } else {
+                updateDownloadProgress(track.id, { message: serverJobStatusText(job) });
+            }
+        },
+    })
+        .catch((error) => {
+            if (error?.name !== 'AbortError') {
+                completeDownloadTask(track.id, false, error?.message || 'Server download failed');
+            }
+        })
+        .finally(() => {
+            ongoingDownloads.delete(downloadKey);
+        });
+
+    return true;
+}
+
+async function tryQueueServerAlbumDownload(album, quality) {
+    const albumId = album?.id || album?.album?.id;
+    if (!isServerDownloadsEnabled() || !albumId) return false;
+
+    const controller = new AbortController();
+    const body = await queueServerDownload(
+        {
+            type: 'album',
+            id: albumId,
+            quality,
+        },
+        { signal: controller.signal }
+    );
+
+    const notification = createBulkDownloadNotification('album', album.title || album.name || 'Album', 1);
+    attachServerCancel(notification.querySelector('.download-cancel'), body.jobId);
+    updateServerBulkDownloadProgress(notification, body.job);
+
+    pollServerDownloadJob(body.jobId, {
+        signal: controller.signal,
+        onUpdate: (job) => {
+            if (job.status === 'completed') {
+                completeBulkDownload(notification, true);
+            } else if (job.status === 'failed' || job.status === 'cancelled') {
+                completeBulkDownload(notification, false, serverJobStatusText(job));
+            } else {
+                updateServerBulkDownloadProgress(notification, job);
+            }
+        },
+    }).catch((error) => {
+        if (error?.name !== 'AbortError') {
+            completeBulkDownload(notification, false, error?.message || 'Server download failed');
+        }
+    });
+
+    return true;
+}
+
 /** Wraps a single {@link WriterEntry}-like object as an AsyncIterable for use with IBulkDownloadWriter.write(). */
 async function* singleWriterEntry(entry) {
     yield entry;
@@ -701,6 +947,19 @@ export async function downloadTracks(tracks, api, quality, _lyricsManager = null
 }
 
 export async function downloadAlbum(album, tracks, api, quality, _lyricsManager = null) {
+    try {
+        if (await tryQueueServerAlbumDownload(album, quality)) {
+            return;
+        }
+    } catch (error) {
+        if (error?.serverDownloadsUnavailable) {
+            console.warn('Server-side downloads unavailable, falling back to browser album download:', error);
+        } else {
+            showNotification(error?.message || 'Failed to queue server album download');
+            throw error;
+        }
+    }
+
     const releaseDateStr =
         album.releaseDate || (tracks[0]?.streamStartDate ? tracks[0].streamStartDate.split('T')[0] : '');
     const releaseDate = releaseDateStr ? new Date(releaseDateStr) : null;
@@ -1092,6 +1351,19 @@ export async function downloadTrackWithMetadata(
     if (ongoingDownloads.has(downloadKey)) {
         showNotification('This track is already being downloaded');
         return;
+    }
+
+    try {
+        if (await tryQueueServerTrackDownload(track, quality, api)) {
+            return;
+        }
+    } catch (error) {
+        if (error?.serverDownloadsUnavailable) {
+            console.warn('Server-side downloads unavailable, falling back to browser download:', error);
+        } else {
+            showNotification(error?.message || 'Failed to queue server download');
+            return;
+        }
     }
 
     const { enrichedTrack } = await tidalAPI.enrichTrack(track, { downloadQuality: quality });

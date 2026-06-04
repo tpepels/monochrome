@@ -14,15 +14,44 @@ services:
         container_name: monochrome
         ports:
             - '${MONOCHROME_PORT:-3000}:4173'
+        environment:
+            PORT: 4173
+            DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/data/music}
+            TEMP_DIR: ${TEMP_DIR:-/tmp/monochrome-downloads}
+            DOWNLOAD_WORKER_ENABLED: ${DOWNLOAD_WORKER_ENABLED:-true}
+            DOWNLOAD_WORKER_CONCURRENCY: ${DOWNLOAD_WORKER_CONCURRENCY:-1}
+            DOWNLOAD_DUPLICATE_CHECK: ${DOWNLOAD_DUPLICATE_CHECK:-false}
+            DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS: ${DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS:-30000}
+            DOWNLOAD_TRANSIENT_MIN_AGE_MS: ${DOWNLOAD_TRANSIENT_MIN_AGE_MS:-900000}
+            REDIS_URL: ${REDIS_URL:-}
+            DOWNLOAD_API_INSTANCES: ${DOWNLOAD_API_INSTANCES:-}
+            DOWNLOAD_STREAMING_INSTANCES: ${DOWNLOAD_STREAMING_INSTANCES:-}
+            DOWNLOAD_QOBUZ_INSTANCES: ${DOWNLOAD_QOBUZ_INSTANCES:-}
+        volumes:
+            - '${MONOCHROME_MUSIC_DIR:-../music}:/data/music'
+            - monochrome_download_tmp:/tmp/monochrome-downloads
         restart: unless-stopped
         networks:
             - monochrome-network
         healthcheck:
-            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4173/']
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4173/api/downloads']
             interval: 30s
             timeout: 3s
             retries: 3
             start_period: 5s
+
+    # Optional Redis backend for persistent queue state and cross-process maintenance locking.
+    monochrome-redis:
+        image: redis:7-alpine
+        container_name: monochrome-redis
+        profiles:
+            - redis
+        restart: unless-stopped
+        command: redis-server --appendonly yes
+        volumes:
+            - monochrome_redis:/data
+        networks:
+            - monochrome-network
 
     # PocketBase backend -- only starts with: docker compose --profile pocketbase up -d
     pocketbase:
@@ -76,3 +105,5 @@ volumes:
     pb_data:
     pb_public:
     pb_hooks:
+    monochrome_download_tmp:
+    monochrome_redis:

@@ -5471,6 +5471,41 @@
                             <div class="settings-group">
                                 <div class="setting-item">
                                     <div class="info">
+                                        <span class="label">Server-side Downloads</span>
+                                        <span class="description"
+                                            >Queue track and album downloads on the server when available</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="server-side-downloads-toggle" />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item" id="server-downloads-panel">
+                                    <div class="info">
+                                        <span class="label">Server Download Queue</span>
+                                        <span class="description" id="server-downloads-summary">backend: unknown</span>
+                                        <span class="description" id="server-downloads-status"></span>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 320px">
+                                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end">
+                                            <button id="server-downloads-refresh" class="btn-secondary">Refresh</button>
+                                            <button id="server-downloads-sweep-dry-run" class="btn-secondary">
+                                                Sweep Dry Run
+                                            </button>
+                                            <button id="server-downloads-sweep-apply" class="btn-secondary">
+                                                Sweep Cleanup
+                                            </button>
+                                        </div>
+                                        <div id="server-downloads-jobs" style="display: grid; gap: 0.375rem"></div>
+                                        <pre
+                                            id="server-downloads-sweep-result"
+                                            style="max-width: 520px; max-height: 120px; overflow: auto; margin: 0; white-space: pre-wrap"
+                                        ></pre>
+                                    </div>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
                                         <span class="label">Write Artists Separately</span>
                                         <span class="description"
                                             >Write artists separately to metadata. Requires player support.</span

@@ -29,6 +29,7 @@ Docker Compose [profiles](https://docs.docker.com/compose/how-tos/profiles/) con
 | Command                                                   | What starts                          |
 | --------------------------------------------------------- | ------------------------------------ |
 | `docker compose up -d`                                    | Monochrome                           |
+| `COMPOSE_PROFILES=redis docker compose up -d`             | Monochrome + Redis download queue    |
 | `docker compose --profile pocketbase up -d`               | Monochrome + PocketBase              |
 | `docker compose --profile dev up -d`                      | Monochrome + Dev server              |
 | `docker compose --profile dev --profile pocketbase up -d` | Monochrome + Dev server + PocketBase |
@@ -118,6 +119,69 @@ docker compose --profile pocketbase up -d
 
 The current PocketBase collection schema is committed at [`database/pb_schema.json`](database/pb_schema.json). Import that schema into a fresh PocketBase instance when setting up account data storage.
 
+### Server-Side Downloads
+
+Server-side downloads are served by the production Monochrome container on the same port as the web app. The container exposes `/api/downloads`, runs the download worker, and writes completed files to `DOWNLOAD_DIR`.
+
+Common variables:
+
+- `MONOCHROME_MUSIC_DIR`: host path mounted into the container, default `./music`.
+- `DOWNLOAD_DIR`: path inside the container, default `/data/music`.
+- `TEMP_DIR`: temporary download/staging root, default `/tmp/monochrome-downloads`.
+- `DOWNLOAD_WORKER_ENABLED`: enable queue execution, default `true`.
+- `DOWNLOAD_WORKER_CONCURRENCY`: concurrent server download jobs, default `1`.
+- `DOWNLOAD_DUPLICATE_CHECK`: skip known local files before queueing when possible, default `false`.
+- `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
+
+Enable Redis-backed queue state and cross-process locking:
+
+```bash
+COMPOSE_PROFILES=redis REDIS_URL=redis://monochrome-redis:6379 docker compose up -d
+```
+
+Verify the server download API:
+
+```bash
+curl http://localhost:${MONOCHROME_PORT:-3000}/api/downloads
+```
+
+### Replacing tidal-ui
+
+Given an old service like:
+
+```yaml
+tidal-ui:
+  ports:
+    - "5001:5000"
+  environment:
+    - DOWNLOAD_DIR=/data/music
+  volumes:
+    - /srv/transmission/downloads/completed/music:/data/music
+```
+
+Use these Monochrome settings:
+
+```env
+MONOCHROME_PORT=5001
+MONOCHROME_MUSIC_DIR=/srv/transmission/downloads/completed/music
+DOWNLOAD_DIR=/data/music
+TEMP_DIR=/tmp/monochrome-downloads
+DOWNLOAD_WORKER_ENABLED=true
+DOWNLOAD_WORKER_CONCURRENCY=1
+DOWNLOAD_DUPLICATE_CHECK=true
+COMPOSE_PROFILES=redis
+REDIS_URL=redis://monochrome-redis:6379
+```
+
+Then deploy:
+
+```bash
+docker compose stop tidal-ui
+docker compose up -d --build
+docker compose logs -f monochrome
+curl http://localhost:5001/api/downloads
+```
+
 ---
 
 ## Portainer Deployment
@@ -183,7 +247,7 @@ docker compose exec pocketbase tar xzf - -C / < backup.tar.gz
 
 ### Production (Dockerfile)
 
-Node.js Alpine image (multi-arch: amd64 + arm64). Installs dependencies, runs `vite build`, then serves the built files with `vite preview` on port 4173.
+Bun Alpine image (multi-arch: amd64 + arm64). The builder runs `vite build`; the runtime installs `ffmpeg`/`ffprobe`, serves `dist/`, and handles `/api/downloads` from `server/app.js` on port 4173.
 
 ### Development (Dockerfile.dev)
 

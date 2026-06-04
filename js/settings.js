@@ -53,6 +53,7 @@ import { authManager } from './accounts/auth.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { containerFormats, customFormats } from './ffmpegFormats.ts';
 import { BulkDownloadMethod, modernSettings } from './ModernSettings.js';
+import { initializeServerDownloadsPanel } from './server-downloads-ui.js';
 
 async function getButterchurnPresets(...args) {
     const butterchurnModule = await import('./visualizers/butterchurn.js');
@@ -5734,6 +5735,15 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     }
 
     // Write multiple artists toggle
+    const serverSideDownloadsToggle = document.getElementById('server-side-downloads-toggle');
+    if (serverSideDownloadsToggle) {
+        serverSideDownloadsToggle.checked = modernSettings.serverSideDownloads;
+        serverSideDownloadsToggle.addEventListener('change', (e) => {
+            modernSettings.serverSideDownloads = e.target.checked;
+        });
+    }
+    initializeServerDownloadsPanel();
+
     const writeArtistsSeparatelyToggle = document.getElementById('write-artists-separately-toggle');
     if (writeArtistsSeparatelyToggle) {
         writeArtistsSeparatelyToggle.checked = modernSettings.writeArtistsSeparately;
