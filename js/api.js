@@ -2070,6 +2070,9 @@ export class LosslessAPI {
         if (!siteKey) {
             return null;
         }
+        if (typeof window === 'undefined' || typeof document === 'undefined') {
+            return null;
+        }
 
         const container = this.getTurnstileContainer();
         container.innerHTML = '';

@@ -2,21 +2,6 @@ import { describe, expect, test } from 'vitest';
 import { MonochromeResolverFacade, ServerResolverAdapter, inspectManifest } from './resolver-adapter.js';
 
 describe('server resolver adapter', () => {
-    function createMemoryStorage() {
-        const values = new Map();
-        return {
-            getItem(key) {
-                return values.has(key) ? values.get(key) : null;
-            },
-            setItem(key, value) {
-                values.set(key, String(value));
-            },
-            removeItem(key) {
-                values.delete(key);
-            },
-        };
-    }
-
     test('delegates resolution through the injected Monochrome resolver facade', async () => {
         const calls = [];
         const adapter = new ServerResolverAdapter({
@@ -38,36 +23,6 @@ describe('server resolver adapter', () => {
             ['track', 't1', 'LOSSLESS'],
             ['album', 'a1'],
         ]);
-    });
-
-    test('disables browser-only Amazon Turnstile flow on the server when no bypass token is configured', () => {
-        const storage = createMemoryStorage();
-        const facade = new MonochromeResolverFacade({
-            env: {
-                AMAZON_MUSIC_ENABLED: 'true',
-                AMAZON_MUSIC_TURNSTILE_SITE_KEY: 'site-key',
-            },
-        });
-
-        facade.applyEnvSettings(storage);
-
-        expect(storage.getItem('amazon-music-enabled')).toBe('false');
-        expect(storage.getItem('amazon-music-turnstile-site-key')).toBe(null);
-    });
-
-    test('keeps Amazon enabled on the server when a Turnstile bypass token is configured', () => {
-        const storage = createMemoryStorage();
-        const facade = new MonochromeResolverFacade({
-            env: {
-                AMAZON_MUSIC_ENABLED: 'true',
-                AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN: 'bypass-token',
-            },
-        });
-
-        facade.applyEnvSettings(storage);
-
-        expect(storage.getItem('amazon-music-enabled')).toBe('true');
-        expect(storage.getItem('amazon-music-turnstile-bypass-token')).toBe('bypass-token');
     });
 
     test('normalizes track resolution from the upstream Monochrome download flow', async () => {

@@ -306,20 +306,6 @@ export class MonochromeResolverFacade {
                 localStorage.setItem(storageKey, String(this.env[envKey]));
             }
         }
-
-        this.applyServerRuntimeProviderGuards(localStorage);
-    }
-
-    applyServerRuntimeProviderGuards(localStorage) {
-        const hasBrowserTurnstile = typeof window !== 'undefined' && typeof document !== 'undefined';
-        const bypassToken =
-            this.env?.AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN ||
-            localStorage.getItem('amazon-music-turnstile-bypass-token');
-
-        if (!hasBrowserTurnstile && !String(bypassToken || '').trim()) {
-            localStorage.setItem('amazon-music-enabled', 'false');
-            localStorage.removeItem('amazon-music-turnstile-site-key');
-        }
     }
 
     async initializeHiFiClient(localStorage) {
