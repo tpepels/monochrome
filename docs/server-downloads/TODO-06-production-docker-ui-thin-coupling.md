@@ -93,7 +93,7 @@ Only add the most strictly necessary tests needed to prove the product.
 
 - Production runtime is implemented in `server/app.js`; it serves `dist/` and the server download APIs from one Bun process.
 - `docker/Dockerfile` now ships the server runtime, `ffmpeg`/`ffprobe`, static assets, and the isolated server-download module.
-- `docker/docker-compose.yml` exposes download runtime settings, upstream provider settings, mounts the music library, and includes an optional Redis profile.
+- `docker/docker-compose.yml` exposes download runtime settings, upstream provider settings with upstream-matching defaults, mounts the music library, and includes an optional Redis profile.
 - The Downloads settings tab now includes a server queue panel with backend/fallback status, worker state, job list, cancel, retry, dry-run sweep, and cleanup sweep actions.
 - Retry is exposed through `POST /api/downloads/:jobId/retry`.
 - `ServerResolverAdapter` delegates through `MonochromeResolverFacade` into `LosslessAPI`, and `server/downloads/README.md` documents the coupling boundary for future upstream merges.

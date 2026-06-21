@@ -132,7 +132,7 @@ Common variables:
 - `DOWNLOAD_WORKER_CONCURRENCY`: concurrent server download jobs, default `1`.
 - `DOWNLOAD_DUPLICATE_CHECK`: skip known local files before queueing when possible, default `false`.
 - `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
-- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Leave blank to use Monochrome defaults.
+- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. The compose defaults match upstream Monochrome and can be overridden in `.env`.
 
 Enable Redis-backed queue state and cross-process locking:
 
@@ -145,6 +145,59 @@ Verify the server download API:
 ```bash
 curl http://localhost:${MONOCHROME_PORT:-3000}/api/downloads
 ```
+
+### Add To Existing Media Stack
+
+If this repository is checked out next to your compose file as `./monochrome`, add this service to your existing stack. This runs only the base Monochrome server and server-side downloader; it does not start Redis, PocketBase, or the dev server.
+
+```yaml
+  monochrome:
+    build:
+      context: ./monochrome
+      dockerfile: docker/Dockerfile
+    container_name: monochrome
+    user: "${UID}:${GID}"
+    ports:
+      - "5001:4173"
+    environment:
+      TZ: ${TZ}
+      PORT: 4173
+      DOWNLOAD_DIR: /data/music
+      TEMP_DIR: /tmp/monochrome-downloads
+      DOWNLOAD_WORKER_ENABLED: "true"
+      DOWNLOAD_WORKER_CONCURRENCY: "1"
+      DOWNLOAD_DUPLICATE_CHECK: "true"
+      DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS: "30000"
+      DOWNLOAD_TRANSIENT_MIN_AGE_MS: "900000"
+      AMAZON_MUSIC_ENABLED: "true"
+      AMAZON_MUSIC_API_BASE_URL: https://amz.geeked.wtf
+      AMAZON_MUSIC_CONVERTER_BASE_URL: https://t2a.geeked.wtf
+      AMAZON_MUSIC_TURNSTILE_SITE_KEY: 0x4AAAAAADgxqF6QVMm0GLHH
+      AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN: ""
+      DEEZER_FALLBACK_ENABLED: "true"
+      DEEZER_FALLBACK_API_BASE_URL: https://dzr.tabs-vs-spaces.wtf
+    volumes:
+      - /srv/completed/music:/data/music
+      - /srv/monochrome/tmp:/tmp/monochrome-downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4173/api/downloads"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+```
+
+Prepare the writable host paths before starting it:
+
+```bash
+mkdir -p /srv/completed/music /srv/monochrome/tmp
+chown -R "${UID}:${GID}" /srv/completed/music /srv/monochrome/tmp
+docker compose up -d --build monochrome
+curl http://localhost:5001/api/downloads
+```
+
+With your Watchtower command using `--label-enable`, this locally built service is intentionally not labelled. Watchtower cannot rebuild from `./monochrome`; update it with `git pull` inside `./monochrome` and `docker compose up -d --build monochrome`.
 
 ### Replacing tidal-ui
 
