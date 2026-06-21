@@ -82,6 +82,18 @@ describe('server download API', () => {
         expect(body.config.downloadRootConfigured).toBe(true);
     });
 
+    test('reports disabled worker config before any job is queued', async () => {
+        const response = await onDownloadsRequest(context(new Request('https://example.test/api/downloads')));
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.jobs).toHaveLength(0);
+        expect(body.worker).toMatchObject({
+            enabled: false,
+            reason: 'Download worker is disabled by configuration.',
+        });
+    });
+
     test('returns a single job and cancels it', async () => {
         const job = await downloadQueue.enqueue(
             { type: 'track', id: '123', quality: 'LOSSLESS' },

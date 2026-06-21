@@ -8,7 +8,7 @@ Only add the most strictly necessary tests needed to prove the product.
 
 - [x] Replace the previous static-only nginx production image with a runtime that serves the frontend and download API.
 - [x] Serve `/api/downloads` routes and the download worker from the production Docker container.
-- [x] Expose `DOWNLOAD_DIR`, `TEMP_DIR`, `REDIS_URL`, worker concurrency, duplicate checks, and provider instance overrides in Docker config.
+- [x] Expose `DOWNLOAD_DIR`, `TEMP_DIR`, `REDIS_URL`, worker concurrency, duplicate checks, provider instance overrides, and upstream provider settings in Docker config.
 - [x] Keep the existing web UI queueing path for track and album downloads.
 - [x] Add a persistent queue/status view, retry actions, Redis fallback/backend status, and manual maintenance sweep actions.
 - [x] Make `server/downloads/resolver-adapter.js` delegate through an explicit resolver facade boundary.
@@ -39,6 +39,13 @@ Only add the most strictly necessary tests needed to prove the product.
   - `DOWNLOAD_API_INSTANCES`
   - `DOWNLOAD_STREAMING_INSTANCES`
   - `DOWNLOAD_QOBUZ_INSTANCES`
+  - `AMAZON_MUSIC_ENABLED`
+  - `AMAZON_MUSIC_API_BASE_URL`
+  - `AMAZON_MUSIC_CONVERTER_BASE_URL`
+  - `AMAZON_MUSIC_TURNSTILE_SITE_KEY`
+  - `AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN`
+  - `DEEZER_FALLBACK_ENABLED`
+  - `DEEZER_FALLBACK_API_BASE_URL`
 - [x] Mount the music library path into the container.
 - [x] Add an optional Redis service/profile for persistent queue state and cross-process locking.
 - [x] Update `DOCKER.md` with a live deployment example replacing `tidal-ui`.
@@ -58,7 +65,7 @@ Only add the most strictly necessary tests needed to prove the product.
 
 ## Thin Resolver Coupling
 
-- [x] Extract a small resolver facade from Monochrome's existing resolver/download flow, preferably from `js/api.js`/`LosslessAPI`, that can run in the server runtime.
+- [x] Use a small resolver facade into Monochrome's existing resolver/download flow from `js/api.js`/`LosslessAPI`.
 - [x] Have `server/downloads/resolver-adapter.js` delegate to that facade instead of duplicating provider instance discovery and Qobuz/HiFi request logic.
 - [x] Keep server-specific normalization in the adapter only: output shape, preview flags, metadata mapping, and manifest inspection.
 - [x] Keep proxy behavior sourced from existing `js/proxy-utils.js`.
@@ -86,8 +93,8 @@ Only add the most strictly necessary tests needed to prove the product.
 
 - Production runtime is implemented in `server/app.js`; it serves `dist/` and the server download APIs from one Bun process.
 - `docker/Dockerfile` now ships the server runtime, `ffmpeg`/`ffprobe`, static assets, and the isolated server-download module.
-- `docker/docker-compose.yml` exposes download runtime settings, mounts the music library, and includes an optional Redis profile.
+- `docker/docker-compose.yml` exposes download runtime settings, upstream provider settings, mounts the music library, and includes an optional Redis profile.
 - The Downloads settings tab now includes a server queue panel with backend/fallback status, worker state, job list, cancel, retry, dry-run sweep, and cleanup sweep actions.
 - Retry is exposed through `POST /api/downloads/:jobId/retry`.
-- `ServerResolverAdapter` delegates through `MonochromeResolverFacade`, and `server/downloads/README.md` documents the coupling boundary for future upstream merges.
+- `ServerResolverAdapter` delegates through `MonochromeResolverFacade` into `LosslessAPI`, and `server/downloads/README.md` documents the coupling boundary for future upstream merges.
 - Verified with Dockerized server-download tests, production image build, and a disposable production container responding from `/api/downloads` and `/`.

@@ -344,6 +344,32 @@ async function downloadToTempFile(resolved, tempFile, { fetchImpl = fetch, fsOps
     await fsOps.writeFile(tempFile, Buffer.concat(chunks));
 }
 
+async function decryptCencAudioFile(encryptedFile, outputFile, resolved, { fsOps = fs } = {}) {
+    if (!resolved.decryptionKey) {
+        throw pipelineError('Encrypted audio is missing a decryption key', 'AUDIO_DECRYPTION_KEY_REQUIRED');
+    }
+
+    const tempOutput = `${outputFile}.decrypted.flac`;
+    try {
+        await execFileAsync('ffmpeg', [
+            '-y',
+            '-decryption_key',
+            String(resolved.decryptionKey),
+            '-i',
+            encryptedFile,
+            '-c:a',
+            'flac',
+            tempOutput,
+        ]);
+        await fsOps.rename(tempOutput, outputFile);
+    } catch (error) {
+        await fsOps.rm(tempOutput, { force: true }).catch(() => {});
+        throw pipelineError('Encrypted audio decryption failed', 'AUDIO_DECRYPTION_FAILED', {
+            cause: error?.message || String(error),
+        });
+    }
+}
+
 function assertNotPreview(resolved) {
     const flags = resolved.presentationFlags || {};
     const values = [
@@ -465,7 +491,24 @@ export async function executeTrackDownload({
         resolved = await resolver.resolveTrackDownload(id, quality);
         assertNotPreview(resolved);
 
-        await downloadToTempFile(resolved, tempFile, { fetchImpl, fsOps, signal });
+        if (resolved.decryptionKey) {
+            const encryptedFile = path.join(jobTempDir, 'track.encrypted');
+            await downloadToTempFile(
+                {
+                    ...resolved,
+                    streamUrl: resolved.sourceUrl || resolved.streamUrl,
+                    manifest: null,
+                    manifestDetails: inspectManifest(null),
+                    urls: [],
+                },
+                encryptedFile,
+                { fetchImpl, fsOps, signal }
+            );
+            await decryptCencAudioFile(encryptedFile, tempFile, resolved, { fsOps });
+            await fsOps.rm(encryptedFile, { force: true }).catch(() => {});
+        } else {
+            await downloadToTempFile(resolved, tempFile, { fetchImpl, fsOps, signal });
+        }
         let validation = await validateAudioFile(tempFile, resolved, { fsOps });
 
         const metadata = buildMetadata(resolved);

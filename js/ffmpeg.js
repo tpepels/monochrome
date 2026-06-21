@@ -1,6 +1,3 @@
-import FfmpegWorker from './ffmpeg.worker.js?worker';
-import coreJs from '!/@ffmpeg/core/dist/esm/ffmpeg-core.js?blob-url';
-import coreWasm from '!/@ffmpeg/core/dist/esm/ffmpeg-core.wasm?blob-url';
 import { FfmpegProgress } from './ffmpeg.types';
 
 /**
@@ -19,6 +16,10 @@ export function loadFfmpeg() {
     return (
         loadFfmpeg.promise ||
         (loadFfmpeg.promise = (async () => {
+            const [{ default: coreJs }, { default: coreWasm }] = await Promise.all([
+                import('!/@ffmpeg/core/dist/esm/ffmpeg-core.js?blob-url'),
+                import('!/@ffmpeg/core/dist/esm/ffmpeg-core.wasm?blob-url'),
+            ]);
             const data = {
                 coreURL: await coreJs(),
                 wasmURL: await coreWasm(),
@@ -27,6 +28,11 @@ export function loadFfmpeg() {
             return data;
         })())
     );
+}
+
+async function createFfmpegWorker() {
+    const { default: FfmpegWorker } = await import('./ffmpeg.worker.js?worker');
+    return new FfmpegWorker();
 }
 
 /**
@@ -54,10 +60,10 @@ async function ffmpegWorker(
 ) {
     const audioData = audioBlob ? await audioBlob.arrayBuffer() : null;
     const assets = loadFfmpeg();
+    const worker = await createFfmpegWorker();
 
     return new Promise((resolve, reject) => {
         let endCategory = null;
-        const worker = new FfmpegWorker();
 
         // Handle abort signal
         const abortHandler = () => {

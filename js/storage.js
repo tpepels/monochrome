@@ -1,6 +1,8 @@
 //storage.js
 
-import { SVG_RIGHT_ARROW } from './icons';
+function svgRightArrow(size = 20) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`;
+}
 
 export const apiSettings = {
     STORAGE_KEY: 'monochrome-api-instances-v9',
@@ -2147,7 +2149,7 @@ export const sidebarSettings = {
             document.body.classList.add('sidebar-collapsed');
             const toggleBtn = document.getElementById('sidebar-toggle');
             if (toggleBtn) {
-                toggleBtn.innerHTML = SVG_RIGHT_ARROW(20);
+                toggleBtn.innerHTML = svgRightArrow(20);
             }
         }
     },

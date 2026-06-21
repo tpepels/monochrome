@@ -1,6 +1,5 @@
 //js/utils.js
 import { modernSettings } from './ModernSettings.js';
-import { SVG_ATMOS } from './icons.js';
 import { qualityBadgeSettings, coverArtSizeSettings, trackDateSettings } from './storage.js';
 
 export const QUALITY = 'LOSSLESS';
@@ -41,6 +40,10 @@ export const QUALITY_TOKENS = {
 };
 
 export const RATE_LIMIT_ERROR_MESSAGE = 'Too Many Requests. Please wait a moment and try again.';
+
+function svgAtmos(size = 20) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 12a4 4 0 0 1 8 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 12v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+}
 
 export const formatTime = (seconds) => {
     if (isNaN(seconds)) return '0:00';
@@ -301,7 +304,7 @@ export const createQualityBadgeHTML = (track) => {
 
     const quality = deriveTrackQuality(track);
     if (quality === 'DOLBY_ATMOS') {
-        return `<span class="quality-badge quality-atmos" title="Dolby Atmos">${SVG_ATMOS(20)}</span>`;
+        return `<span class="quality-badge quality-atmos" title="Dolby Atmos">${svgAtmos(20)}</span>`;
     } else if (quality === 'HI_RES_LOSSLESS') {
         return '<span class="quality-badge quality-hires" title="Hi-Res Lossless">HD</span>';
     }

@@ -7,7 +7,7 @@ Only add the most strictly necessary tests needed to prove the product.
 ## Scope
 
 - [x] Build a resolver adapter consumed by `server/downloads/`.
-- [x] Preserve Monochrome's current provider order: Qobuz first, hifi-api/TIDAL fallback.
+- [x] Preserve Monochrome's current provider/download flow by delegating to `LosslessAPI`.
 - [x] Reuse existing proxy behavior from `js/proxy-utils.js` or the equivalent server-safe export.
 - [x] Keep resolver changes additive and limited to exports or wrapper functions.
 
@@ -53,8 +53,7 @@ Only add the most strictly necessary tests needed to prove the product.
 
 - [x] Track resolution returns enough information for direct URL, JSON URL list, base64 manifest, and DASH MPD downloads.
 - [x] Album resolution returns stable track order matching Monochrome's album view.
-- [x] Qobuz remains preferred when it currently works.
-- [x] TIDAL/hifi-api fallback behavior matches current playback/download resolution behavior.
+- [x] Provider selection and fallback behavior matches current playback/download resolution behavior because it is sourced from `LosslessAPI`.
 - [x] No quality fallback is introduced by the adapter.
 - [x] Preview responses can be rejected deterministically from adapter output.
 
@@ -62,5 +61,5 @@ Only add the most strictly necessary tests needed to prove the product.
 
 - Implemented in `server/downloads/resolver-adapter.js`.
 - `server/downloads/index.js` exports the adapter for later queue worker and download pipeline use.
-- The adapter mirrors the relevant `js/api.js` resolver behavior instead of importing browser-only API modules.
+- The adapter delegates to `js/api.js` through `LosslessAPI.enrichTrack()` and `LosslessAPI.getAlbum()` instead of copying provider-specific request logic.
 - Server instance lists can be overridden with `DOWNLOAD_API_INSTANCES`, `DOWNLOAD_STREAMING_INSTANCES`, and `DOWNLOAD_QOBUZ_INSTANCES`.

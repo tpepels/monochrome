@@ -5,7 +5,7 @@
 ### Monochrome Only
 
 ```bash
-docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file .env up -d
 ```
 
 Visit `http://localhost:3000`
@@ -13,7 +13,7 @@ Visit `http://localhost:3000`
 ### Development
 
 ```bash
-docker compose --profile dev up -d
+docker compose -f docker/docker-compose.yml --env-file .env --profile dev up -d
 ```
 
 Visit `http://localhost:5173` (hot-reload enabled)
@@ -28,11 +28,11 @@ Docker Compose [profiles](https://docs.docker.com/compose/how-tos/profiles/) con
 
 | Command                                                   | What starts                          |
 | --------------------------------------------------------- | ------------------------------------ |
-| `docker compose up -d`                                    | Monochrome                           |
-| `COMPOSE_PROFILES=redis docker compose up -d`             | Monochrome + Redis download queue    |
-| `docker compose --profile pocketbase up -d`               | Monochrome + PocketBase              |
-| `docker compose --profile dev up -d`                      | Monochrome + Dev server              |
-| `docker compose --profile dev --profile pocketbase up -d` | Monochrome + Dev server + PocketBase |
+| `docker compose -f docker/docker-compose.yml --env-file .env up -d`                                    | Monochrome                           |
+| `COMPOSE_PROFILES=redis docker compose -f docker/docker-compose.yml --env-file .env up -d`             | Monochrome + Redis download queue    |
+| `docker compose -f docker/docker-compose.yml --env-file .env --profile pocketbase up -d`               | Monochrome + PocketBase              |
+| `docker compose -f docker/docker-compose.yml --env-file .env --profile dev up -d`                      | Monochrome + Dev server              |
+| `docker compose -f docker/docker-compose.yml --env-file .env --profile dev --profile pocketbase up -d` | Monochrome + Dev server + PocketBase |
 
 In `docker-compose.yml`, it looks like this:
 
@@ -112,7 +112,7 @@ Monochrome uses Appwrite for user authentication. While it defaults to official 
 Monochrome uses PocketBase to store user data (playlists, favorites, profiles, etc.). You can run it alongside Monochrome using the `pocketbase` profile:
 
 ```bash
-docker compose --profile pocketbase up -d
+docker compose -f docker/docker-compose.yml --env-file .env --profile pocketbase up -d
 ```
 
 #### PocketBase Schema Note
@@ -132,11 +132,12 @@ Common variables:
 - `DOWNLOAD_WORKER_CONCURRENCY`: concurrent server download jobs, default `1`.
 - `DOWNLOAD_DUPLICATE_CHECK`: skip known local files before queueing when possible, default `false`.
 - `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
+- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Leave blank to use Monochrome defaults.
 
 Enable Redis-backed queue state and cross-process locking:
 
 ```bash
-COMPOSE_PROFILES=redis REDIS_URL=redis://monochrome-redis:6379 docker compose up -d
+COMPOSE_PROFILES=redis REDIS_URL=redis://monochrome-redis:6379 docker compose -f docker/docker-compose.yml --env-file .env up -d
 ```
 
 Verify the server download API:
@@ -176,9 +177,9 @@ REDIS_URL=redis://monochrome-redis:6379
 Then deploy:
 
 ```bash
-docker compose stop tidal-ui
-docker compose up -d --build
-docker compose logs -f monochrome
+docker rm -f tidal-ui
+docker compose -f docker/docker-compose.yml --env-file .env up -d --build
+docker compose -f docker/docker-compose.yml --env-file .env logs -f monochrome
 curl http://localhost:5001/api/downloads
 ```
 
@@ -222,23 +223,23 @@ When pulling updates from upstream (`git pull upstream main`), there are no conf
 
 ```bash
 # View logs
-docker compose logs -f
-docker compose logs -f pocketbase
+docker compose -f docker/docker-compose.yml --env-file .env logs -f
+docker compose -f docker/docker-compose.yml --env-file .env logs -f pocketbase
 
 # Rebuild after code changes
-docker compose up -d --build
+docker compose -f docker/docker-compose.yml --env-file .env up -d --build
 
 # Stop everything (include all profiles you started)
-docker compose --profile pocketbase down
+docker compose -f docker/docker-compose.yml --env-file .env --profile pocketbase down
 
 # Stop and remove volumes (data loss!)
-docker compose --profile pocketbase down -v
+docker compose -f docker/docker-compose.yml --env-file .env --profile pocketbase down -v
 
 # Backup PocketBase data
-docker compose exec pocketbase tar czf - /pb_data > backup.tar.gz
+docker compose -f docker/docker-compose.yml --env-file .env exec pocketbase tar czf - /pb_data > backup.tar.gz
 
 # Restore PocketBase data
-docker compose exec pocketbase tar xzf - -C / < backup.tar.gz
+docker compose -f docker/docker-compose.yml --env-file .env exec pocketbase tar xzf - -C / < backup.tar.gz
 ```
 
 ---

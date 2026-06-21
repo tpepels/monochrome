@@ -274,6 +274,7 @@ export class MemoryDownloadQueue {
     snapshot(config = this.lastConfig) {
         this.lastConfig = config;
         this.ensureStartupSweep(config);
+        this.applyWorkerConfig(config);
         const jobs = this.order.map((jobId) => summarizeJob(this.jobs.get(jobId))).filter(Boolean);
         const counts = Object.values(DOWNLOAD_JOB_STATUSES).reduce((acc, status) => {
             acc[status] = 0;
@@ -307,6 +308,11 @@ export class MemoryDownloadQueue {
         };
     }
 
+    applyWorkerConfig(config = this.lastConfig) {
+        this.workerEnabled = config.workerEnabled !== false;
+        this.workerReason = this.workerEnabled ? null : 'Download worker is disabled by configuration.';
+    }
+
     activeJobIds() {
         return this.order.filter((jobId) => {
             const job = this.jobs.get(jobId);
@@ -334,8 +340,7 @@ export class MemoryDownloadQueue {
     schedule(config = this.lastConfig) {
         this.lastConfig = config;
         this.ensureStartupSweep(config);
-        this.workerEnabled = config.workerEnabled !== false;
-        this.workerReason = this.workerEnabled ? null : 'Download worker is disabled by configuration.';
+        this.applyWorkerConfig(config);
         if (!this.workerEnabled) {
             this.resolveIdleIfNeeded();
             return;
