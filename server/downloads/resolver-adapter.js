@@ -1,20 +1,11 @@
 import { getProxyUrl } from '../../js/proxy-utils.js';
+import { createMonochromeApi } from './monochrome-runtime.js';
 
 function normalizeQuality(quality) {
     const normalized = String(quality || '').trim().toUpperCase();
     if (normalized === 'NORMAL') return 'HIGH';
     if (normalized === 'LOW_MP3') return 'LOW';
     return normalized || 'LOSSLESS';
-}
-
-function envList(env, key) {
-    const value = env?.[key];
-    if (!value) return null;
-    return String(value)
-        .split(',')
-        .map((url) => url.trim())
-        .filter(Boolean)
-        .map((url) => ({ url, isUser: true, version: 'env' }));
 }
 
 function coverUrlFromId(id, size = '1280') {
@@ -260,94 +251,11 @@ export class MonochromeResolverFacade {
         this.apiPromise = null;
     }
 
-    installServerLocalStorage() {
-        if (globalThis.localStorage) return globalThis.localStorage;
-
-        const values = new Map();
-        globalThis.localStorage = {
-            getItem(key) {
-                return values.has(key) ? values.get(key) : null;
-            },
-            setItem(key, value) {
-                values.set(key, String(value));
-            },
-            removeItem(key) {
-                values.delete(key);
-            },
-            clear() {
-                values.clear();
-            },
-        };
-        return globalThis.localStorage;
-    }
-
-    applyEnvSettings(localStorage) {
-        const userInstances = {
-            api: envList(this.env, 'DOWNLOAD_API_INSTANCES') || [],
-            streaming: envList(this.env, 'DOWNLOAD_STREAMING_INSTANCES') || [],
-            qobuz: envList(this.env, 'DOWNLOAD_QOBUZ_INSTANCES') || [],
-        };
-        if (userInstances.api.length || userInstances.streaming.length || userInstances.qobuz.length) {
-            localStorage.setItem('monochrome-user-api-instances-v1', JSON.stringify(userInstances));
-        }
-
-        const envToStorage = [
-            ['AMAZON_MUSIC_ENABLED', 'amazon-music-enabled'],
-            ['AMAZON_MUSIC_API_BASE_URL', 'amazon-music-api-base-url'],
-            ['AMAZON_MUSIC_CONVERTER_BASE_URL', 'amazon-music-converter-base-url'],
-            ['AMAZON_MUSIC_TURNSTILE_SITE_KEY', 'amazon-music-turnstile-site-key'],
-            ['AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN', 'amazon-music-turnstile-bypass-token'],
-            ['DEEZER_FALLBACK_ENABLED', 'deezer-fallback-enabled'],
-            ['DEEZER_FALLBACK_API_BASE_URL', 'deezer-fallback-api-base-url'],
-        ];
-
-        for (const [envKey, storageKey] of envToStorage) {
-            if (this.env?.[envKey] != null && String(this.env[envKey]).trim() !== '') {
-                localStorage.setItem(storageKey, String(this.env[envKey]));
-            }
-        }
-    }
-
-    async initializeHiFiClient(localStorage) {
-        const { HiFiClient } = await import('../../js/HiFi.ts');
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
-        try {
-            await HiFiClient.initialize({
-                storage: [localStorage],
-                token: localStorage.getItem('hifi_token') || undefined,
-                tokenExpiry: Number.parseInt(localStorage.getItem('hifi_token_expiry') || '0', 10),
-                refreshToken: localStorage.getItem('hifi_refresh_token') || undefined,
-                signal: controller.signal,
-            });
-        } catch (error) {
-            if (!String(error?.message || '').includes('already initialized')) {
-                console.warn('Failed to initialize server HiFiClient:', error);
-            }
-        } finally {
-            clearTimeout(timeout);
-        }
-    }
-
     async getApi() {
         if (this.monochromeApi) return this.monochromeApi;
         if (this.apiPromise) return this.apiPromise;
 
-        this.apiPromise = (async () => {
-            const localStorage = this.installServerLocalStorage();
-            this.applyEnvSettings(localStorage);
-            if (this.fetch) {
-                globalThis.fetch = this.fetch;
-            }
-
-            const [{ LosslessAPI }, { apiSettings }] = await Promise.all([
-                import('../../js/api.js'),
-                import('../../js/storage.js'),
-            ]);
-            await this.initializeHiFiClient(localStorage);
-            return new LosslessAPI(apiSettings);
-        })();
+        this.apiPromise = createMonochromeApi({ env: this.env, fetchImpl: this.fetch });
         return this.apiPromise;
     }
 

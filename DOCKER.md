@@ -132,6 +132,7 @@ Common variables:
 - `DOWNLOAD_WORKER_CONCURRENCY`: concurrent server download jobs, default `1`.
 - `DOWNLOAD_DUPLICATE_CHECK`: skip known local files before queueing when possible, default `false`.
 - `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
+- `DOWNLOAD_INSTANCE_DISCOVERY`: opt into upstream uptime worker discovery, default `false`. The server uses static Monochrome-compatible defaults by default so downloads do not stall when `tidal-uptime.geeked.wtf` is unreachable from the container.
 - `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Defaults match upstream Monochrome. In server-side downloads, Amazon can use `AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN`; without it, the upstream Amazon Turnstile branch returns no server token and Monochrome continues to the next upstream fallback.
 
 Enable Redis-backed queue state and cross-process locking:
