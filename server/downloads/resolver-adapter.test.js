@@ -106,6 +106,66 @@ describe('server resolver adapter', () => {
         expect(result.presentationFlags.trackPresentation).toBe('PREVIEW');
     });
 
+    test('falls back to upstream native TIDAL manifests when external providers miss', async () => {
+        const mpd =
+            '<MPD><Period><AdaptationSet mimeType="audio/mp4"><Representation id="r1"><SegmentTemplate initialization="https://audio.tidal.test/init.mp4?token=a&amp;info=b" media="https://audio.tidal.test/seg-$Number$.m4s?token=a&amp;info=b" startNumber="1"><SegmentTimeline><S d="10"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>';
+        const calls = [];
+        const facade = new MonochromeResolverFacade({
+            monochromeApi: {
+                getTrackManifestFormats() {
+                    return ['FLAC'];
+                },
+                async enrichTrack() {
+                    throw new Error('Could not resolve audio stream from Amazon Music, Qobuz, or Deezer');
+                },
+                async fetchWithRetry(path, options) {
+                    calls.push([path, options]);
+                    return {
+                        async json() {
+                            return { native: true };
+                        },
+                    };
+                },
+                async normalizeTrackManifestResponse(_json, quality) {
+                    return [
+                        { id: 125, duration: 240 },
+                        {
+                            manifest: Buffer.from(mpd, 'utf8').toString('base64'),
+                            manifestMimeType: 'application/dash+xml',
+                            audioQuality: quality,
+                            assetPresentation: 'FULL',
+                        },
+                    ];
+                },
+                parseTrackLookup(entries) {
+                    return { track: entries[0], info: entries[1] };
+                },
+                async getTrackMetadata(trackId) {
+                    return {
+                        id: trackId,
+                        title: 'TIDAL Song',
+                        duration: 240,
+                        isrc: 'ISRC2',
+                        album: { title: 'Album', cover: 'cov' },
+                        artist: { name: 'Artist' },
+                    };
+                },
+            },
+        });
+
+        const result = await facade.resolveTrackDownload('125', 'LOSSLESS');
+
+        expect(calls[0][0]).toContain('/trackManifests/?id=125');
+        expect(calls[0][1]).toMatchObject({ type: 'api', directOnly: true });
+        expect(result.provider).toBe('tidal');
+        expect(result.manifestKind).toBe('dash');
+        expect(result.dash.initialization).toContain('&info=b');
+        expect(result.dash.initialization).not.toContain('&amp;');
+        expect(result.urls).toEqual([]);
+        expect(result.providerErrors[0]).toContain('Amazon Music, Qobuz, or Deezer');
+        expect(result.isPreview).toBe(false);
+    });
+
     test('normalizes album metadata and stable track order from upstream getAlbum', async () => {
         const facade = new MonochromeResolverFacade({
             monochromeApi: {

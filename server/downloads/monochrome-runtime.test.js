@@ -6,6 +6,7 @@ import {
     SERVER_DEFAULT_INSTANCES,
     applyResolverEnv,
     applyServerInstanceDefaults,
+    buildHiFiClientOptions,
     createMonochromeApi,
     installServerLocalStorage,
 } from './monochrome-runtime.js';
@@ -138,6 +139,29 @@ describe('monochrome runtime boundary', () => {
 
         expect(settings.instancesLoaded).toBe(false);
         expect(settings.defaultInstances.api).toEqual([{ url: 'existing' }]);
+    });
+
+    test('builds HiFi client options from TIDAL envs before local storage', () => {
+        const storage = memoryStorage();
+        storage.setItem('hifi_token', 'stored-token');
+        storage.setItem('hifi_token_expiry', '123');
+        storage.setItem('hifi_refresh_token', 'stored-refresh');
+
+        expect(
+            buildHiFiClientOptions(storage, {
+                TIDAL_CLIENT_ID: 'client-id',
+                TIDAL_CLIENT_SECRET: 'client-secret',
+                TIDAL_ACCESS_TOKEN: 'env-token',
+                TIDAL_TOKEN_EXPIRY: '456',
+                TIDAL_REFRESH_TOKEN: 'env-refresh',
+            })
+        ).toEqual({
+            clientId: 'client-id',
+            clientSecret: 'client-secret',
+            token: 'env-token',
+            tokenExpiry: 456,
+            refreshToken: 'env-refresh',
+        });
     });
 
     test('keeps upstream Monochrome imports behind the resolver boundary', () => {

@@ -43,7 +43,16 @@ function sortUrlsByQuality(urls) {
 
 function getAttr(text, name) {
     const match = text.match(new RegExp(`${name}=["']([^"']+)["']`, 'i'));
-    return match ? match[1] : null;
+    return match ? decodeXmlEntities(match[1]) : null;
+}
+
+function decodeXmlEntities(value) {
+    return String(value)
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
 }
 
 function firstTagText(xml, tagName) {
@@ -243,6 +252,97 @@ function trackOrderInfo(track, index, albumTracks) {
     };
 }
 
+function isExternalProviderResolutionError(error) {
+    return /Could not resolve audio stream from Amazon Music, Qobuz, or Deezer|Cannot resolve audio stream: Amazon Music failed/i.test(
+        String(error?.message || error || '')
+    );
+}
+
+function fallbackManifestFormats(api, quality) {
+    if (typeof api.getTrackManifestFormats === 'function') {
+        return api.getTrackManifestFormats(quality);
+    }
+
+    switch (normalizeQuality(quality)) {
+        case 'HI_RES_LOSSLESS':
+            return ['FLAC_HIRES'];
+        case 'HIGH':
+            return ['AACLC'];
+        case 'LOW':
+            return ['HEAACV1'];
+        default:
+            return ['FLAC'];
+    }
+}
+
+async function resolveNativeTidalLookup(api, trackId, quality) {
+    if (
+        typeof api.fetchWithRetry !== 'function' ||
+        typeof api.normalizeTrackManifestResponse !== 'function' ||
+        typeof api.parseTrackLookup !== 'function'
+    ) {
+        throw new Error('Native TIDAL manifest methods are not available');
+    }
+
+    const params = new URLSearchParams({
+        id: String(trackId),
+        quality,
+        adaptive: 'false',
+    });
+    for (const format of fallbackManifestFormats(api, quality)) {
+        params.append('formats', format);
+    }
+
+    const response = await api.fetchWithRetry(`/trackManifests/?${params.toString()}`, {
+        type: 'api',
+        directOnly: true,
+    });
+    const jsonResponse = await response.json();
+    return api.parseTrackLookup(await api.normalizeTrackManifestResponse(jsonResponse, quality));
+}
+
+async function resolveTidalFallback(api, trackId, quality) {
+    const errors = [];
+
+    try {
+        return await resolveNativeTidalLookup(api, trackId, quality);
+    } catch (error) {
+        errors.push(error);
+    }
+
+    if (typeof api.getTrack === 'function') {
+        try {
+            return await api.getTrack(trackId, quality);
+        } catch (error) {
+            errors.push(error);
+        }
+    }
+
+    const error = new Error(
+        `Could not resolve audio stream from Amazon Music, Qobuz, Deezer, or TIDAL: ${errors
+            .map((entry) => entry?.message || String(entry))
+            .filter(Boolean)
+            .join('; ')}`
+    );
+    error.providerErrors = errors;
+    throw error;
+}
+
+async function resolveTrackMetadata(api, trackId, lookup) {
+    if (typeof api.getTrackMetadata === 'function') {
+        try {
+            return await api.getTrackMetadata(trackId);
+        } catch {
+            // Fall through to the manifest stub.
+        }
+    }
+
+    return {
+        id: lookup?.track?.id ?? trackId,
+        duration: lookup?.track?.duration ?? null,
+    };
+}
+
 export class MonochromeResolverFacade {
     constructor({ env = {}, fetchImpl = null, monochromeApi = null } = {}) {
         this.env = env;
@@ -262,7 +362,22 @@ export class MonochromeResolverFacade {
     async resolveTrackDownload(trackId, quality = 'LOSSLESS') {
         const normalizedQuality = normalizeQuality(quality);
         const api = await this.getApi();
-        const enriched = await api.enrichTrack(trackId, { downloadQuality: normalizedQuality });
+        let enriched = null;
+        let providerErrors = [];
+        try {
+            enriched = await api.enrichTrack(trackId, { downloadQuality: normalizedQuality });
+        } catch (error) {
+            if (!isExternalProviderResolutionError(error)) throw error;
+
+            const lookup = await resolveTidalFallback(api, trackId, normalizedQuality);
+            const track = normalizeTrack(await resolveTrackMetadata(api, trackId, lookup));
+            enriched = {
+                lookup,
+                enrichedTrack: track,
+                externalProvider: 'tidal',
+            };
+            providerErrors = [error?.message || String(error)];
+        }
         const lookup = enriched.lookup || {};
         const track = enriched.enrichedTrack || {};
         const manifestDetails = inspectManifest(lookup.info?.manifest);
@@ -285,7 +400,7 @@ export class MonochromeResolverFacade {
             replayGain: track.replayGain || replayGainFromInfo(lookup.info),
             presentationFlags,
             metadataProvider: 'monochrome',
-            providerErrors: [],
+            providerErrors,
             external: {
                 streamType: enriched.externalStreamType || null,
                 decryptionKey: enriched.externalDecryptionKey || null,

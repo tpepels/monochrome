@@ -45,6 +45,15 @@ function isEnabled(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+function firstEnv(env = {}, keys = []) {
+    for (const key of keys) {
+        if (env?.[key] != null && String(env[key]).trim() !== '') {
+            return String(env[key]).trim();
+        }
+    }
+    return '';
+}
+
 function cloneInstances(instances) {
     return instances.map((instance) => ({ ...instance }));
 }
@@ -106,17 +115,34 @@ export function applyServerInstanceDefaults(apiSettings, env = {}) {
     apiSettings._loadPromise = null;
 }
 
-export async function initializeHiFiClient(localStorage, { timeoutMs = 5000 } = {}) {
+export function buildHiFiClientOptions(localStorage, env = {}) {
+    const token = firstEnv(env, ['TIDAL_ACCESS_TOKEN', 'HIFI_TOKEN']) || localStorage.getItem('hifi_token') || '';
+    const tokenExpiry =
+        firstEnv(env, ['TIDAL_TOKEN_EXPIRY', 'TIDAL_TOKEN_EXPIRY_MS', 'HIFI_TOKEN_EXPIRY']) ||
+        localStorage.getItem('hifi_token_expiry') ||
+        '0';
+    const refreshToken =
+        firstEnv(env, ['TIDAL_REFRESH_TOKEN', 'HIFI_REFRESH_TOKEN']) || localStorage.getItem('hifi_refresh_token') || '';
+
+    return {
+        clientId: firstEnv(env, ['TIDAL_CLIENT_ID', 'HIFI_CLIENT_ID']) || undefined,
+        clientSecret: firstEnv(env, ['TIDAL_CLIENT_SECRET', 'HIFI_CLIENT_SECRET']) || undefined,
+        token: token || undefined,
+        tokenExpiry: Number.parseInt(tokenExpiry, 10) || 0,
+        refreshToken: refreshToken || undefined,
+    };
+}
+
+export async function initializeHiFiClient(localStorage, { timeoutMs = 5000, env = {} } = {}) {
     const { HiFiClient } = await import('../../js/HiFi.ts');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const options = buildHiFiClientOptions(localStorage, env);
 
     try {
         await HiFiClient.initialize({
             storage: [localStorage],
-            token: localStorage.getItem('hifi_token') || undefined,
-            tokenExpiry: Number.parseInt(localStorage.getItem('hifi_token_expiry') || '0', 10),
-            refreshToken: localStorage.getItem('hifi_refresh_token') || undefined,
+            ...options,
             signal: controller.signal,
         });
     } catch (error) {
@@ -149,7 +175,7 @@ export async function createMonochromeApi({
     applyServerInstanceDefaults(monochromeApiSettings, env);
 
     if (initializeHiFi) {
-        await initializeHiFiClient(storage);
+        await initializeHiFiClient(storage, { env });
     }
 
     return new MonochromeLosslessAPI(monochromeApiSettings);
