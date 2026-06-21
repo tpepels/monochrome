@@ -25,7 +25,7 @@ import { isIos, isSafari } from './platform-detection.js';
 import { db } from './db.js';
 import { getProxyUrl } from './proxy-utils.js';
 
-import { SVG_CLOCK, SVG_ATMOS } from './icons.js';
+import { SVG_CLOCK, SVG_ATMOS, SVG_TRIANGLE_ALERT } from './icons.js';
 import { UIRenderer } from './ui.js';
 import { MediaSession } from '@capgo/capacitor-media-session';
 
@@ -103,67 +103,7 @@ export class Player {
             });
         }
 
-        const waitForImagesLoading = () => {
-            const images = Array.from(document.images).filter((img) => !img.complete);
-            if (images.length === 0) return Promise.resolve();
-            return Promise.all(
-                images.map(
-                    (img) =>
-                        new Promise((res) => {
-                            img.onload = img.onerror = res;
-                        })
-                )
-            );
-        };
-
-        if (document.readyState !== 'complete') {
-            await new Promise((resolve) => window.addEventListener('load', resolve));
-        }
-        await waitForImagesLoading();
-
-        // Initialize Shaka player
-        const shaka = await import('shaka-player');
-        shaka.polyfill.installAll();
-        if (shaka.Player.isBrowserSupported()) {
-            this.shakaPlayer = new shaka.Player();
-            this.shakaPlayer.configure({
-                streaming: {
-                    bufferingGoal: 30,
-                    rebufferingGoal: 2,
-                    bufferBehind: 30,
-                    jumpLargeGaps: true,
-                },
-                abr: {
-                    enabled: true,
-                    defaultBandwidthEstimate: 100000,
-                    switchInterval: 1,
-                    bandwidthDowngradeTarget: 0.8,
-                    restrictToElementSize: false,
-                },
-                mediaSource: {
-                    codecSwitchingStrategy: 'smooth',
-                },
-            });
-            this.shakaPlayer.getNetworkingEngine().registerRequestFilter((type, request) => {
-                if (type === shaka.net.NetworkingEngine.RequestType.SEGMENT) {
-                    const uris = request.uris;
-                    for (let i = 0; i < uris.length; i++) {
-                        if (uris[i].includes('tidal.com')) {
-                            uris[i] = getProxyUrl(uris[i]);
-                        }
-                    }
-                }
-            });
-            this.shakaPlayer.addEventListener('adaptation', this.updateAdaptiveQualityBadge.bind(this));
-            this.shakaPlayer.addEventListener('variantchanged', this.updateAdaptiveQualityBadge.bind(this));
-
-            this.shakaInitialized = false;
-
-            // Monitor and bridge different codec groups (e.g. AAC to FLAC) since native ABR isolates them
-            setInterval(this.evaluateCrossCodecAbr.bind(this), 3000);
-        } else {
-            console.error('Browser not supported for Shaka Player');
-        }
+        this.shakaReady = this._initShaka();
 
         this.loadQueueState();
         await this.setupMediaSession();
@@ -192,15 +132,12 @@ export class Player {
                 .catch(() => {});
         });
 
-        // Handle visibility change - AudioContext can be suspended when backgrounded
         document.addEventListener('visibilitychange', async () => {
             const el = this.activeElement;
             if (document.visibilityState === 'hidden' && !el.paused) {
-                // Proactively resume context when going to background to prevent suspension
                 void audioContextManager.resume();
             }
             if (document.visibilityState === 'visible' && !el.paused) {
-                // Ensure audio context is resumed when user returns to the app
                 if (!audioContextManager.isReady()) {
                     audioContextManager.init(el);
                 }
@@ -214,6 +151,74 @@ export class Player {
 
         this._setupVideoSync();
         this._setupAnimatedCoverSync();
+    }
+
+    async _initShaka() {
+        try {
+            const waitForImagesLoading = () => {
+                const images = Array.from(document.images).filter((img) => !img.complete);
+                if (images.length === 0) return Promise.resolve();
+                return Promise.all(
+                    images.map(
+                        (img) =>
+                            new Promise((res) => {
+                                img.onload = img.onerror = res;
+                            })
+                    )
+                );
+            };
+
+            if (document.readyState !== 'complete') {
+                await new Promise((resolve) => window.addEventListener('load', resolve));
+            }
+            await waitForImagesLoading();
+
+            const shaka = await import('shaka-player');
+            shaka.polyfill.installAll();
+            if (!shaka.Player.isBrowserSupported()) {
+                console.error('Browser not supported for Shaka Player');
+                return;
+            }
+
+            this.shakaPlayer = new shaka.Player();
+            this.shakaPlayer.configure({
+                streaming: {
+                    bufferingGoal: 30,
+                    rebufferingGoal: 2,
+                    bufferBehind: 30,
+                    jumpLargeGaps: true,
+                },
+                abr: {
+                    enabled: true,
+                    defaultBandwidthEstimate: 100000,
+                    switchInterval: 1,
+                    bandwidthDowngradeTarget: 0.8,
+                    restrictToElementSize: false,
+                },
+                mediaSource: {
+                    codecSwitchingStrategy: 'smooth',
+                    useSourceElements: false,
+                },
+            });
+            this.shakaPlayer.getNetworkingEngine().registerRequestFilter((type, request) => {
+                if (type === shaka.net.NetworkingEngine.RequestType.SEGMENT) {
+                    const uris = request.uris;
+                    for (let i = 0; i < uris.length; i++) {
+                        if (uris[i].includes('tidal.com')) {
+                            uris[i] = getProxyUrl(uris[i]);
+                        }
+                    }
+                }
+            });
+            this.shakaPlayer.addEventListener('adaptation', this.updateAdaptiveQualityBadge.bind(this));
+            this.shakaPlayer.addEventListener('variantchanged', this.updateAdaptiveQualityBadge.bind(this));
+
+            this.shakaInitialized = false;
+
+            setInterval(this.evaluateCrossCodecAbr.bind(this), 3000);
+        } catch (e) {
+            console.error('Shaka Player initialization failed:', e);
+        }
     }
 
     _setupAnimatedCoverSync() {
@@ -407,8 +412,7 @@ export class Player {
                     }
                 }
                 if (titleEl) {
-                    const qualityBadge = createQualityBadgeHTML(track);
-                    titleEl.innerHTML = `${escapeHtml(trackTitle)} ${qualityBadge}`;
+                    this.updateNowPlayingTitle(track);
                 }
                 if (albumEl) {
                     const albumTitle = track.album?.title || '';
@@ -529,12 +533,16 @@ export class Player {
         if (this.isIOS) {
             // iOS: set handlers only when playback starts. Setting them in the constructor makes
             // the lock screen show +10/-10. Registering on first 'playing' gives next/previous track
-            this.audio.addEventListener('playing', () => setHandlers(), { once: true });
+            this.audio.addEventListener('playing', () => setHandlers().catch(() => {}), { once: true });
             if (this.video) {
-                this.video.addEventListener('playing', () => setHandlers(), { once: true });
+                this.video.addEventListener('playing', () => setHandlers().catch(() => {}), { once: true });
             }
         } else {
-            await setHandlers();
+            try {
+                await setHandlers();
+            } catch (e) {
+                console.warn('MediaSession action handlers not registered:', e);
+            }
         }
     }
 
@@ -594,6 +602,8 @@ export class Player {
 
                 this.preloadCache.set(track.id, streamInfo);
                 const streamUrl = streamInfo.url;
+
+                if (streamInfo.playbackType?.includes('cenc')) continue;
 
                 // Warm connection and pre-fetch
                 if (!streamUrl.startsWith('blob:')) {
@@ -700,7 +710,11 @@ export class Player {
             return false;
         }
 
-        const requiresShaka = !track.isLocal && (streamUrl.startsWith('blob:') || streamUrl.includes('.mpd'));
+        const requiresShaka =
+            !track.isLocal &&
+            (streamInfo.playbackType?.includes('cenc') ||
+                (streamUrl.startsWith('blob:') && streamInfo.playbackType !== 'direct') ||
+                streamUrl.includes('.mpd'));
         if (requiresShaka && (!this.shakaPlayer || this.shakaPlayer.getMediaElement() !== activeElement)) {
             return false;
         }
@@ -717,6 +731,17 @@ export class Player {
             this.backfillReplayGainFromTrack(track, currentSequence);
         }
 
+        const deezerHiResFallback =
+            streamInfo.provider === 'deezer' &&
+            (streamInfo.deezerHiRes || deriveTrackQuality(track) === 'HI_RES_LOSSLESS');
+        track.deezerHiResFallback = deezerHiResFallback;
+        if (this.currentTrack?.id === track.id) {
+            this.currentTrack.deezerHiResFallback = deezerHiResFallback;
+        }
+        if (deezerHiResFallback) {
+            this.updateNowPlayingTitle(track);
+        }
+
         const retryImmediateHandoff = async (error) => {
             if (this.playbackSequence !== currentSequence || this.currentTrack?.id !== track.id) {
                 return;
@@ -731,8 +756,22 @@ export class Player {
 
         if (requiresShaka) {
             const loadTarget = streamInfo.preloadManager || streamUrl;
+            if (streamInfo.playbackType?.includes('cenc')) {
+                this.shakaPlayer.configure({
+                    drm: {
+                        clearKeys: {
+                            [streamInfo.keyId]: streamInfo.decryptionKey,
+                        },
+                    },
+                });
+            } else {
+                this.shakaPlayer.configure({ drm: { clearKeys: {} } });
+            }
+            const shakaMimeType = streamInfo.playbackType?.includes('cenc') ? streamInfo.mimeType || null : null;
             handoffPromise =
-                startTime > 0 ? this.shakaPlayer.load(loadTarget, startTime) : this.shakaPlayer.load(loadTarget);
+                startTime > 0
+                    ? this.shakaPlayer.load(loadTarget, startTime, shakaMimeType)
+                    : this.shakaPlayer.load(loadTarget, null, shakaMimeType);
             this.shakaInitialized = true;
 
             handoffPromise = handoffPromise.then(() => {
@@ -953,6 +992,7 @@ export class Player {
     }
 
     async playTrackFromQueue(startTime = 0, recursiveCount = 0, isRetry = false, options = {}) {
+        await this.shakaReady;
         const { preserveGestureToken = false } = options;
         if (!isRetry) {
             this.isFallbackRetry = false;
@@ -1128,8 +1168,7 @@ export class Player {
                 }
             }
         }
-        document.querySelector('.now-playing-bar .title').innerHTML =
-            `${escapeHtml(trackTitle)} ${createQualityBadgeHTML(track)}`;
+        this.updateNowPlayingTitle(track);
         const albumEl = document.querySelector('.now-playing-bar .album');
         if (albumEl) {
             const albumTitle = track.album?.title || '';
@@ -1333,6 +1372,26 @@ export class Player {
                 if (this.playbackSequence !== currentSequence) return;
 
                 streamUrl = resolvedStreamInfo.url;
+                if (resolvedStreamInfo.provider === 'amazon' && resolvedStreamInfo.quality) {
+                    track.amazonMusicQualitySelected = resolvedStreamInfo.quality;
+                    track.amazonMusicQualityDisplay = resolvedStreamInfo.qualityDisplay;
+                    if (this.currentTrack?.id === track.id) {
+                        this.currentTrack.amazonMusicQualitySelected = resolvedStreamInfo.quality;
+                        this.currentTrack.amazonMusicQualityDisplay = resolvedStreamInfo.qualityDisplay;
+                    }
+                    this.updateNowPlayingTitle(track);
+                }
+
+                const deezerHiResFallback =
+                    resolvedStreamInfo.provider === 'deezer' &&
+                    (resolvedStreamInfo.deezerHiRes || deriveTrackQuality(track) === 'HI_RES_LOSSLESS');
+                track.deezerHiResFallback = deezerHiResFallback;
+                if (this.currentTrack?.id === track.id) {
+                    this.currentTrack.deezerHiResFallback = deezerHiResFallback;
+                }
+                if (deezerHiResFallback) {
+                    this.updateNowPlayingTitle(track);
+                }
 
                 if (resolvedStreamInfo.rgInfo) {
                     this.currentRgValues = resolvedStreamInfo.rgInfo;
@@ -1346,7 +1405,14 @@ export class Player {
                 if (this.playbackSequence !== currentSequence) return;
 
                 // Handle playback
-                if (streamUrl && (streamUrl.startsWith('blob:') || streamUrl.includes('.mpd')) && !track.isLocal) {
+                const shouldUseShaka =
+                    streamUrl &&
+                    !track.isLocal &&
+                    (resolvedStreamInfo.playbackType?.includes('cenc') ||
+                        streamUrl.includes('.mpd') ||
+                        (streamUrl.startsWith('blob:') && resolvedStreamInfo.playbackType !== 'direct'));
+
+                if (shouldUseShaka) {
                     // It's likely a DASH manifest URL
                     if (this.shakaPlayer.getMediaElement() !== activeElement) {
                         await this.shakaPlayer.attach(activeElement);
@@ -1354,16 +1420,31 @@ export class Player {
                     }
 
                     const loadTarget = resolvedStreamInfo.preloadManager || streamUrl;
+                    if (resolvedStreamInfo.playbackType?.includes('cenc')) {
+                        this.shakaPlayer.configure({
+                            drm: {
+                                clearKeys: {
+                                    [resolvedStreamInfo.keyId]: resolvedStreamInfo.decryptionKey,
+                                },
+                            },
+                        });
+                    } else {
+                        this.shakaPlayer.configure({ drm: { clearKeys: {} } });
+                    }
+                    const shakaMimeType = resolvedStreamInfo.playbackType?.includes('cenc')
+                        ? resolvedStreamInfo.mimeType || null
+                        : null;
 
                     try {
                         if (startTime > 0) {
-                            await this.shakaPlayer.load(getProxyUrl(loadTarget), startTime);
+                            await this.shakaPlayer.load(getProxyUrl(loadTarget), startTime, shakaMimeType);
                         } else {
-                            await this.shakaPlayer.load(getProxyUrl(loadTarget));
+                            await this.shakaPlayer.load(getProxyUrl(loadTarget), null, shakaMimeType);
                         }
                     } catch (e) {
                         console.error('PreloadManager load Error:', e);
-                        if (loadTarget !== streamUrl) await this.shakaPlayer.load(getProxyUrl(streamUrl));
+                        if (loadTarget !== streamUrl)
+                            await this.shakaPlayer.load(getProxyUrl(streamUrl), null, shakaMimeType);
                         else throw e;
                     }
 
@@ -2160,6 +2241,16 @@ export class Player {
         });
     }
 
+    updateNowPlayingTitle(track = this.currentTrack) {
+        if (!track) return;
+        const titleEl = document.querySelector('.now-playing-bar .title');
+        if (!titleEl) return;
+        const warning = track.deezerHiResFallback
+            ? `<span class="deezer-hires-warning" role="img" tabindex="0" aria-label="Hi-Res unavailable for this track. Playing in CD-quality lossless instead. That's 16-bit / 44.1 kHz FLAC.">${SVG_TRIANGLE_ALERT(16)}</span>`
+            : '';
+        titleEl.innerHTML = `${escapeHtml(getTrackTitle(track))} ${createQualityBadgeHTML(track)}${warning}`;
+    }
+
     updateAdaptiveQualityBadge() {
         if (!this.currentTrack) return;
 
@@ -2168,6 +2259,10 @@ export class Player {
             if (!titleEl) return;
 
             let badgeEl = titleEl.querySelector('.shaka-quality-badge');
+            if (this.currentTrack.amazonMusicQualitySelected) {
+                if (badgeEl) badgeEl.style.display = 'none';
+                return;
+            }
 
             // Determine if the track is inherently an Atmos track based on metadata
             const trackBaseQuality = deriveTrackQuality(this.currentTrack);
@@ -2465,7 +2560,7 @@ export class Player {
 
     updateMediaSessionPlaybackState() {
         const isPlaying = !this.activeElement.paused;
-        void MediaSession.setPlaybackState({ playbackState: isPlaying ? 'playing' : 'paused' });
+        MediaSession.setPlaybackState({ playbackState: isPlaying ? 'playing' : 'paused' }).catch(() => {});
 
         // Start/stop Android foreground service to prevent background audio throttling
         this._updateBackgroundAudioService(isPlaying);

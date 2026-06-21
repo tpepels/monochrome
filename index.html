@@ -1761,10 +1761,16 @@
                                 </a>
                             </li>
                             <li class="nav-item" id="sidebar-nav-donate">
-                                <a id="sidebar-donate-link" href="/donate">
+                                <a href="/donate">
                                     <use svg="!lucide/hand-heart.svg" size="24" />
                                     <span>Donate</span>
                                 </a>
+                                <div id="sidebar-donate-goal-container" class="sidebar-donate-goal">
+                                    <div class="sidebar-donate-goal-track">
+                                        <div id="sidebar-donate-goal-progress" class="sidebar-donate-goal-fill"></div>
+                                    </div>
+                                    <span id="sidebar-donate-goal-text">0%</span>
+                                </div>
                             </li>
                             <li class="nav-item" id="sidebar-nav-settings">
                                 <a href="/settings">
@@ -1882,6 +1888,7 @@
                     <div class="home-header-tabs">
                         <button class="home-tab active" data-tab="for-you">Home</button>
                         <button class="home-tab" data-tab="explore">Hot & New</button>
+                        <button class="home-tab" data-tab="editors-picks">Editor's Picks</button>
                         <button class="home-tab" data-tab="aoty">AOTY</button>
                     </div>
 
@@ -1892,24 +1899,6 @@
                                 You haven't listened to anything yet. Search for your favorite songs to get started!
                             </p>
                         </div>
-
-                        <section
-                            class="content-section"
-                            id="home-editors-picks-section-empty"
-                            style="margin-top: 0; display: none"
-                        >
-                            <div
-                                style="
-                                    display: flex;
-                                    align-items: center;
-                                    justify-content: space-between;
-                                    margin-bottom: 1rem;
-                                "
-                            >
-                                <h2 class="section-title" style="margin-bottom: 0">Editor's Picks</h2>
-                            </div>
-                            <div class="card-grid" id="home-editors-picks-empty"></div>
-                        </section>
 
                         <div id="home-content" style="display: none">
                             <section class="content-section">
@@ -2006,19 +1995,6 @@
                                 </div>
                                 <div class="card-grid" id="home-recent-mixed"></div>
                             </section>
-                            <section class="content-section" id="home-editors-picks-section">
-                                <div
-                                    style="
-                                        display: flex;
-                                        align-items: center;
-                                        justify-content: space-between;
-                                        margin-bottom: 1rem;
-                                    "
-                                >
-                                    <h2 class="section-title" style="margin-bottom: 0">Editor's Picks</h2>
-                                </div>
-                                <div class="card-grid" id="home-editors-picks"></div>
-                            </section>
                         </div>
                     </div>
 
@@ -2026,6 +2002,12 @@
                         <div id="explore-content">
                             <div class="card-grid" id="explore-grid"></div>
                         </div>
+                    </div>
+
+                    <div id="home-view-editors-picks" class="home-view" style="display: none">
+                        <section class="content-section" style="margin-top: 0">
+                            <div class="card-grid" id="home-editors-picks"></div>
+                        </section>
                     </div>
 
                     <div id="home-view-aoty" class="home-view" style="display: none">
@@ -5734,6 +5716,145 @@
                             </div>
 
                             <div class="settings-group">
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Amazon Music</span>
+                                        <span class="description"
+                                            >Use Amazon Music streams first, then fall back to Qobuz, then Deezer as a
+                                            last resort.</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="amazon-music-toggle" checked />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Amazon Music API URL</span>
+                                        <span class="description">The Amazon Music API endpoint</span>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="amazon-music-api-base-url"
+                                        placeholder="https://amz.geeked.wtf"
+                                        style="
+                                            width: 220px;
+                                            padding: 0.35rem 0.5rem;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-md);
+                                            background: var(--card);
+                                            color: var(--foreground);
+                                            font-size: 0.8rem;
+                                        "
+                                    />
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Tidal to ASIN URL</span>
+                                        <span class="description"
+                                            >The converter endpoint used before Amazon lookup</span
+                                        >
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="amazon-music-converter-base-url"
+                                        placeholder="https://t2a.geeked.wtf"
+                                        style="
+                                            width: 220px;
+                                            padding: 0.35rem 0.5rem;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-md);
+                                            background: var(--card);
+                                            color: var(--foreground);
+                                            font-size: 0.8rem;
+                                        "
+                                    />
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Turnstile Site Key</span>
+                                        <span class="description"
+                                            >Required for Amazon Music requests protected by Turnstile</span
+                                        >
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="amazon-music-turnstile-site-key"
+                                        placeholder="0x..."
+                                        style="
+                                            width: 220px;
+                                            padding: 0.35rem 0.5rem;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-md);
+                                            background: var(--card);
+                                            color: var(--foreground);
+                                            font-size: 0.8rem;
+                                        "
+                                    />
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Turnstile Bypass Token</span>
+                                        <span class="description"
+                                            >Optional server-side bypass token for trusted deployments</span
+                                        >
+                                    </div>
+                                    <input
+                                        type="password"
+                                        id="amazon-music-turnstile-bypass-token"
+                                        placeholder="Optional"
+                                        autocomplete="off"
+                                        style="
+                                            width: 220px;
+                                            padding: 0.35rem 0.5rem;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-md);
+                                            background: var(--card);
+                                            color: var(--foreground);
+                                            font-size: 0.8rem;
+                                        "
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Deezer Fallback</span>
+                                        <span class="description"
+                                            >Last-resort source, used only when both Amazon Music and Qobuz fail. Tops
+                                            out at 16-bit lossless (FLAC).</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="deezer-fallback-toggle" checked />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Deezer Fallback API URL</span>
+                                        <span class="description">The Deezer fallback API endpoint</span>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="deezer-fallback-api-base-url"
+                                        placeholder="https://dzr.tabs-vs-spaces.wtf"
+                                        style="
+                                            width: 220px;
+                                            padding: 0.35rem 0.5rem;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-md);
+                                            background: var(--card);
+                                            color: var(--foreground);
+                                            font-size: 0.8rem;
+                                        "
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
                                 <div id="api-instance-manager">
                                     <div class="setting-item">
                                         <div class="info">
@@ -6091,29 +6212,304 @@
                     </div>
                 </div>
                 <div id="page-donate" class="page">
-                    <div style="text-align: center; padding: 2rem; max-width: 500px; margin: 0 auto">
-                        <h2 class="section-title" style="margin-bottom: 1.5rem">Support Monochrome</h2>
-                        <p style="margin-bottom: 1.5rem; line-height: 1.6; color: var(--muted-foreground)">
+                    <div class="donate-page-wrapper">
+                        <h2 class="section-title donate-page-title">Support Monochrome</h2>
+                        <p class="donate-page-desc">
                             If Monochrome has been useful to you and you're able to, consider making a donation. It
                             helps pay for the server and domain, and you get to support us :)
                         </p>
-                        <a
-                            href="https://ko-fi.com/monochrometf"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="btn-primary"
-                            style="
-                                text-decoration: none;
-                                display: inline-flex;
-                                align-items: center;
-                                gap: 0.5rem;
-                                margin-bottom: 2rem;
-                            "
-                        >
-                            Donate on Ko-fi
-                        </a>
-                        <div style="padding-top: 1.5rem; border-top: 1px solid var(--border)">
-                            <p style="font-size: 0.9rem; color: var(--muted-foreground); margin-bottom: 1rem">
+                        <div class="donate-goal-card">
+                            <div class="donate-goal-card-header">
+                                <span class="donate-goal-card-label">Donation Goal</span>
+                                <span id="donate-goal-percent" class="donate-goal-card-percent">0%</span>
+                            </div>
+                            <div class="donate-goal-track">
+                                <div id="donate-goal-progress" class="donate-goal-fill"></div>
+                            </div>
+                            <div class="donate-goal-card-footer">
+                                <span id="donate-goal">$0.00</span>
+                                <span>of $1,000.00 goal</span>
+                            </div>
+                        </div>
+                        <div class="donate-actions" id="donate-actions">
+                            <a
+                                href="https://ko-fi.com/monochrometf"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="btn-primary donate-kofi-btn"
+                            >
+                                Donate on Ko-fi
+                            </a>
+                            <button type="button" class="btn-primary donate-crypto-btn" id="donate-crypto-btn">
+                                Donate with crypto
+                            </button>
+                        </div>
+                        <div class="donate-crypto-section" id="donate-crypto-section" hidden>
+                            <h3 class="donate-crypto-title">Pay with crypto</h3>
+                            <p class="donate-crypto-subtitle">Tap any address to copy it to your clipboard.</p>
+                            <div class="donate-crypto-list" id="donate-crypto-list">
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Monero (XMR)"
+                                    data-address="84QSJs6sq1GSS6f3HFL1Yc6QK3f73867aQduTnaxGdcvXTkpnduaU16f98akdwRo6HdPYfoNwn1GJijc3iLfGXhd5MLcfsk"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Monero (XMR)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >84QSJs6sq1GSS6f3HFL1Yc6QK3f73867aQduTnaxGdcvXTkpnduaU16f98akdwRo6HdPYfoNwn1GJijc3iLfGXhd5MLcfsk</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (Active)"
+                                    data-address="bc1qzl0kznz3xxdpmz2m77qe3mx8ds06tcvm7pk2t4"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · Active</span>
+                                        <span class="crypto-wallet-addr"
+                                            >bc1qzl0kznz3xxdpmz2m77qe3mx8ds06tcvm7pk2t4</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (P2WPKH)"
+                                    data-address="bc1qf7elcxp394a7ly5pgqg0wsetzkkqn2xrlzpeh2"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · P2WPKH</span>
+                                        <span class="crypto-wallet-addr"
+                                            >bc1qf7elcxp394a7ly5pgqg0wsetzkkqn2xrlzpeh2</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (P2PKH)"
+                                    data-address="1NnLbNBH8RcTfbfEpZyf1iW1ezXv3XBAQR"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · P2PKH</span>
+                                        <span class="crypto-wallet-addr">1NnLbNBH8RcTfbfEpZyf1iW1ezXv3XBAQR</span>
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (P2SH)"
+                                    data-address="3J3YpbRZtX7exyt962s5zbC9PMGQhZ4B7j"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · P2SH</span>
+                                        <span class="crypto-wallet-addr">3J3YpbRZtX7exyt962s5zbC9PMGQhZ4B7j</span>
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (P2TR)"
+                                    data-address="bc1p87xf6f8tnsnlt0tjkj9suysyq72kxz4a8fprgynggxk6p9mcr3wq5rhd43"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · P2TR (Taproot)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >bc1p87xf6f8tnsnlt0tjkj9suysyq72kxz4a8fprgynggxk6p9mcr3wq5rhd43</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (P2WSH)"
+                                    data-address="bc1q6luyymmww83d260925g6cvy8qjy4y4djg40cgqjcqszs9upes3xsy9nt6m"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · P2WSH</span>
+                                        <span class="crypto-wallet-addr"
+                                            >bc1q6luyymmww83d260925g6cvy8qjy4y4djg40cgqjcqszs9upes3xsy9nt6m</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin (Silent Payments)"
+                                    data-address="sp1qq0wnt8ehzg9hes4kyc23s5h4mc0gcr69fp6clm4m5yjuc78v0as4xq5j3wz03v9jw4yslcmue7xy7ek80sm3lnw8eq7ce9tkjfs3d0rj3yhj6lw6"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · Silent Payments</span>
+                                        <span class="crypto-wallet-addr"
+                                            >sp1qq0wnt8ehzg9hes4kyc23s5h4mc0gcr69fp6clm4m5yjuc78v0as4xq5j3wz03v9jw4yslcmue7xy7ek80sm3lnw8eq7ce9tkjfs3d0rj3yhj6lw6</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin Lightning"
+                                    data-address="oblongbalinese7350@cake.cash"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin · Lightning</span>
+                                        <span class="crypto-wallet-addr">oblongbalinese7350@cake.cash</span>
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Litecoin (Active)"
+                                    data-address="ltc1qt9jspfdwcgas9q4sf5q9ajn7x9ka8mfywsehrr"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Litecoin · Active</span>
+                                        <span class="crypto-wallet-addr"
+                                            >ltc1qt9jspfdwcgas9q4sf5q9ajn7x9ka8mfywsehrr</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Litecoin (P2WPKH)"
+                                    data-address="ltc1qqtsdhlae2rm67avrw7eal57j77845lz5kvz6qj"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Litecoin · P2WPKH</span>
+                                        <span class="crypto-wallet-addr"
+                                            >ltc1qqtsdhlae2rm67avrw7eal57j77845lz5kvz6qj</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Litecoin (MWEB)"
+                                    data-address="ltcmweb1qq06pgdyw2xlwy64vhz3l903kmp84j0qgx9nu7er8ckr6tp2289r9sqe9ntqyzyd2usf298ln5cvpfc7wccsys320ajr5sx8hfy43eut74c2jae4c"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Litecoin · MWEB</span>
+                                        <span class="crypto-wallet-addr"
+                                            >ltcmweb1qq06pgdyw2xlwy64vhz3l903kmp84j0qgx9nu7er8ckr6tp2289r9sqe9ntqyzyd2usf298ln5cvpfc7wccsys320ajr5sx8hfy43eut74c2jae4c</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="EVM address"
+                                    data-address="0x078A47E9bbe2e0D7aEb2B2B09302ceB2af964593"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name"
+                                            >Ethereum / EVM · ETH · BNB · Polygon · Base · Arbitrum</span
+                                        >
+                                        <span class="crypto-wallet-addr"
+                                            >0x078A47E9bbe2e0D7aEb2B2B09302ceB2af964593</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Solana (SOL)"
+                                    data-address="2zdNcs4Uu2377Nzjc8P91qH7hHiyQs8E1f27A6icUSKx"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Solana (SOL)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >2zdNcs4Uu2377Nzjc8P91qH7hHiyQs8E1f27A6icUSKx</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Zcash (ZEC)"
+                                    data-address="u120zcwxlt9azs36d07uafdnj7fzsa62stwuk4f2eruk272e8he0czxvyjquakhp968mvm0tuzmqx6ln7c5k3qdw2qem2ypk4p6s3hgczx"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Zcash (ZEC)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >u120zcwxlt9azs36d07uafdnj7fzsa62stwuk4f2eruk272e8he0czxvyjquakhp968mvm0tuzmqx6ln7c5k3qdw2qem2ypk4p6s3hgczx</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Tron (TRX)"
+                                    data-address="TQU2kovh58VnnPr1PUjZUhNY2a3UfM4ERh"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Tron (TRX)</span>
+                                        <span class="crypto-wallet-addr">TQU2kovh58VnnPr1PUjZUhNY2a3UfM4ERh</span>
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Dogecoin (DOGE)"
+                                    data-address="DNpErVMo3yPM6UFAStSfWuBbHPvUwx95D9"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Dogecoin (DOGE)</span>
+                                        <span class="crypto-wallet-addr">DNpErVMo3yPM6UFAStSfWuBbHPvUwx95D9</span>
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Bitcoin Cash (BCH)"
+                                    data-address="bitcoincash:qzg8j4ddjew3ptcr9g503qk0345kdr332s5jmrzeym"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Bitcoin Cash (BCH)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >bitcoincash:qzg8j4ddjew3ptcr9g503qk0345kdr332s5jmrzeym</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="crypto-wallet"
+                                    data-label="Nano (XNO)"
+                                    data-address="nano_1qfmbi1b9tzocx9socbffy7z6te6r7z75byc7ofpfpqjpbfb1i3eaqe3etjz"
+                                >
+                                    <span class="crypto-wallet-meta">
+                                        <span class="crypto-wallet-name">Nano (XNO)</span>
+                                        <span class="crypto-wallet-addr"
+                                            >nano_1qfmbi1b9tzocx9socbffy7z6te6r7z75byc7ofpfpqjpbfb1i3eaqe3etjz</span
+                                        >
+                                    </span>
+                                    <use svg="!lucide/copy.svg" size="18" class="crypto-wallet-copy-icon" />
+                                </button>
+                            </div>
+                        </div>
+                        <div class="donate-alt-section">
+                            <p class="donate-alt-text">
                                 If you cannot financially support us, please consider starring the project on GitHub and
                                 sharing with friends!
                             </p>
@@ -6121,8 +6517,7 @@
                                 href="https://github.com/monochrome-music/monochrome"
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                class="btn-secondary"
-                                style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem"
+                                class="btn-secondary donate-github-btn"
                             >
                                 Star on GitHub
                             </a>

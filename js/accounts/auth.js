@@ -49,6 +49,9 @@ export class AuthManager {
     async init() {
         const params = new URLSearchParams(window.location.search);
         if (params.has('oauth') || params.has('userId') || params.has('secret')) {
+            if (params.has('secret')) {
+                storeAuthToken(params.get('secret'));
+            }
             window.history.replaceState({}, '', window.location.pathname);
         }
 
@@ -84,7 +87,7 @@ export class AuthManager {
             await authClient.signIn.social({
                 provider,
                 callbackURL: window.location.origin + '/index.html',
-                errorCallbackURL: window.location.origin + '/login.html',
+                errorCallbackURL: window.location.origin + '/index.html',
             });
         } catch (error) {
             console.error('Login failed:', error);

@@ -96,11 +96,7 @@ export const apiSettings = {
                         { url: 'https://hund.qqdl.site', version: '2.6' },
                         { url: 'https://wolf.qqdl.site', version: '2.6' },
                     ],
-                    qobuz: [
-                        { url: 'https://qdl-api.monochrome.tf', version: '1.0' },
-                        { url: 'https://qobuz.kennyy.com.br', version: '1.0' },
-                        { url: 'https://mono.scavengerfurs.net', version: '1.0' },
-                    ],
+                    qobuz: [{ url: 'https://qobuz.kennyy.com.br', version: '1.0' }],
                 };
                 this.instancesLoaded = true;
                 this._loadPromise = null;
@@ -130,7 +126,7 @@ export const apiSettings = {
 
             // Ensure default Qobuz instance is always available
             if (groupedInstances.qobuz.length === 0) {
-                groupedInstances.qobuz = [{ url: 'https://qdl-api.monochrome.tf', version: '1.0' }];
+                groupedInstances.qobuz = [{ url: 'https://qobuz.kennyy.com.br', version: '1.0' }];
             }
 
             this.defaultInstances = groupedInstances;
@@ -3064,14 +3060,123 @@ export const musicProviderSettings = {
 
     getProvider() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) || 'tidal';
+            return localStorage.getItem(this.STORAGE_KEY) || 'amazon';
         } catch {
-            return 'tidal';
+            return 'amazon';
         }
     },
 
     setProvider(provider) {
         localStorage.setItem(this.STORAGE_KEY, provider);
+    },
+};
+
+export const amazonMusicSettings = {
+    ENABLED_KEY: 'amazon-music-enabled',
+    API_BASE_URL_KEY: 'amazon-music-api-base-url',
+    CONVERTER_BASE_URL_KEY: 'amazon-music-converter-base-url',
+    TURNSTILE_SITE_KEY: 'amazon-music-turnstile-site-key',
+    TURNSTILE_BYPASS_TOKEN: 'amazon-music-turnstile-bypass-token',
+    DEFAULT_API_BASE_URL: 'https://amz.geeked.wtf',
+    DEFAULT_CONVERTER_BASE_URL: 'https://t2a.geeked.wtf',
+    DEFAULT_TURNSTILE_SITE_KEY: '0x4AAAAAADgxqF6QVMm0GLHH',
+
+    isEnabled() {
+        try {
+            return localStorage.getItem(this.ENABLED_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.ENABLED_KEY, enabled ? 'true' : 'false');
+    },
+
+    getApiBaseUrl() {
+        try {
+            return localStorage.getItem(this.API_BASE_URL_KEY) || this.DEFAULT_API_BASE_URL;
+        } catch {
+            return this.DEFAULT_API_BASE_URL;
+        }
+    },
+
+    setApiBaseUrl(url) {
+        localStorage.setItem(this.API_BASE_URL_KEY, url || this.DEFAULT_API_BASE_URL);
+    },
+
+    getConverterBaseUrl() {
+        try {
+            return localStorage.getItem(this.CONVERTER_BASE_URL_KEY) || this.DEFAULT_CONVERTER_BASE_URL;
+        } catch {
+            return this.DEFAULT_CONVERTER_BASE_URL;
+        }
+    },
+
+    setConverterBaseUrl(url) {
+        localStorage.setItem(this.CONVERTER_BASE_URL_KEY, url || this.DEFAULT_CONVERTER_BASE_URL);
+    },
+
+    getTurnstileSiteKey() {
+        try {
+            return (
+                localStorage.getItem(this.TURNSTILE_SITE_KEY) ||
+                import.meta.env.VITE_AMAZON_TURNSTILE_SITE_KEY ||
+                this.DEFAULT_TURNSTILE_SITE_KEY
+            );
+        } catch {
+            return this.DEFAULT_TURNSTILE_SITE_KEY;
+        }
+    },
+
+    setTurnstileSiteKey(siteKey) {
+        localStorage.setItem(this.TURNSTILE_SITE_KEY, siteKey || '');
+    },
+
+    getTurnstileBypassToken() {
+        try {
+            return (
+                localStorage.getItem(this.TURNSTILE_BYPASS_TOKEN) ||
+                import.meta.env.VITE_AMAZON_TURNSTILE_BYPASS_TOKEN ||
+                ''
+            );
+        } catch {
+            return '';
+        }
+    },
+
+    setTurnstileBypassToken(token) {
+        localStorage.setItem(this.TURNSTILE_BYPASS_TOKEN, token || '');
+    },
+};
+
+export const deezerFallbackSettings = {
+    ENABLED_KEY: 'deezer-fallback-enabled',
+    API_BASE_URL_KEY: 'deezer-fallback-api-base-url',
+    DEFAULT_API_BASE_URL: 'https://dzr.tabs-vs-spaces.wtf',
+
+    isEnabled() {
+        try {
+            return localStorage.getItem(this.ENABLED_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.ENABLED_KEY, enabled ? 'true' : 'false');
+    },
+
+    getApiBaseUrl() {
+        try {
+            return localStorage.getItem(this.API_BASE_URL_KEY) || this.DEFAULT_API_BASE_URL;
+        } catch {
+            return this.DEFAULT_API_BASE_URL;
+        }
+    },
+
+    setApiBaseUrl(url) {
+        localStorage.setItem(this.API_BASE_URL_KEY, url || this.DEFAULT_API_BASE_URL);
     },
 };
 
@@ -3231,13 +3336,28 @@ export const contentBlockingSettings = {
     BLOCKED_TRACKS_KEY: 'blocked-tracks',
     BLOCKED_ALBUMS_KEY: 'blocked-albums',
 
+    // Hardcoded always-blocked artist IDs. Merged into the user blocklist on
+    // every read so the block survives localStorage clears. To allow playback
+    // for one of these artists again, remove the ID from this array.
+    HARDCODED_BLOCKED_ARTIST_IDS: [3995478],
+
+    _hardcodedBlockedArtists() {
+        return this.HARDCODED_BLOCKED_ARTIST_IDS.map((id) => ({
+            id,
+            name: null,
+            blockedAt: 0,
+            hardcoded: true,
+        }));
+    },
+
     // Blocked Artists
     getBlockedArtists() {
         try {
             const data = localStorage.getItem(this.BLOCKED_ARTISTS_KEY);
-            return data ? JSON.parse(data) : [];
+            const user = data ? JSON.parse(data) : [];
+            return [...this._hardcodedBlockedArtists(), ...user];
         } catch {
-            return [];
+            return this._hardcodedBlockedArtists();
         }
     },
 
@@ -3367,6 +3487,27 @@ export const contentBlockingSettings = {
     shouldHideArtist(artist) {
         if (!artist) return true;
         return this.isArtistBlocked(artist.id);
+    },
+
+    // True only for hardcoded (non-user-removable) blocks. Renderers use
+    // this to omit the item entirely rather than just dim it.
+    isHardcodedBlockedArtist(artistId) {
+        if (!artistId) return false;
+        return this.HARDCODED_BLOCKED_ARTIST_IDS.some((id) => String(id) === String(artistId));
+    },
+
+    isHardcodedBlockedTrack(track) {
+        if (!track) return false;
+        if (track.artist?.id && this.isHardcodedBlockedArtist(track.artist.id)) return true;
+        if (track.artists?.some((a) => this.isHardcodedBlockedArtist(a.id))) return true;
+        return false;
+    },
+
+    isHardcodedBlockedAlbum(album) {
+        if (!album) return false;
+        if (album.artist?.id && this.isHardcodedBlockedArtist(album.artist.id)) return true;
+        if (album.artists?.some((a) => this.isHardcodedBlockedArtist(a.id))) return true;
+        return false;
     },
 
     // Filter arrays
