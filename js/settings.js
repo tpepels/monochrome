@@ -1122,10 +1122,10 @@ export async function initializeSettings(scrobbler, player, api, ui) {
             if (localOption) {
                 localOption.remove();
             }
-            // If the stored method is 'folder' or 'local' without native support, fall back to 'zip'
+            // If the stored method is 'folder' or 'local' without native support, fall back to individual files.
             const currentMethod = modernSettings.bulkDownloadMethod;
             if (currentMethod === BulkDownloadMethod.Folder || currentMethod === BulkDownloadMethod.LocalMedia) {
-                modernSettings.bulkDownloadMethod = BulkDownloadMethod.Zip;
+                modernSettings.bulkDownloadMethod = BulkDownloadMethod.Individual;
             }
         }
         bulkDownloadMethod.value = modernSettings.bulkDownloadMethod;
@@ -1159,9 +1159,9 @@ export async function initializeSettings(scrobbler, player, api, ui) {
                             modernSettings.bulkDownloadMethod = previousMethod;
                             bulkDownloadMethod.value = previousMethod;
                         } else {
-                            // Fall back to zip which is always present
-                            modernSettings.bulkDownloadMethod = 'zip';
-                            bulkDownloadMethod.value = 'zip';
+                            // Fall back to individual files, which is always present.
+                            modernSettings.bulkDownloadMethod = BulkDownloadMethod.Individual;
+                            bulkDownloadMethod.value = BulkDownloadMethod.Individual;
                         }
                     }
                 }

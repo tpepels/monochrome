@@ -845,7 +845,11 @@ async function createBulkWriter(folderName) {
                 return null;
             }
         }
-        // Browser without File System Access API - fall through to ZIP
+        // Browser without File System Access API - fall through to individual files.
+    }
+
+    if ((method === BulkDownloadMethod.LocalMedia || method === BulkDownloadMethod.Folder) && !hasFolderPicker) {
+        return SequentialFileWriter;
     }
 
     // ── Folder Picker method ─────────────────────────────────────────────────
@@ -872,7 +876,7 @@ async function createBulkWriter(folderName) {
     if (method === BulkDownloadMethod.Individual) {
         return SequentialFileWriter;
     }
-    // method === 'zip' (or folder picker unavailable as fallback)
+    // method === 'zip'
     if (!forceZipBlob && hasFileSystemAccess) {
         return new ZipStreamWriter(`${folderName}.zip`);
     }

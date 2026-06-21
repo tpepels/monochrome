@@ -228,7 +228,7 @@ export const modernSettings = new ModernSettings()
             transformer: Boolean,
         },
     })
-    .addProperty('bulkDownloadMethod', 'zip' as BulkDownloadMethod, {
+    .addProperty('bulkDownloadMethod', BulkDownloadMethod.Individual, {
         getter: (stored, settings) => {
             try {
                 if (stored && Object.values(BulkDownloadMethod).includes(stored)) {
@@ -241,9 +241,9 @@ export const modernSettings = new ModernSettings()
                     return (settings.bulkDownloadMethod = BulkDownloadMethod.Individual);
                 }
 
-                return BulkDownloadMethod.Zip;
+                return BulkDownloadMethod.Individual;
             } catch {
-                return BulkDownloadMethod.Zip;
+                return BulkDownloadMethod.Individual;
             }
         },
     })

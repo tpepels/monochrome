@@ -132,7 +132,7 @@ Common variables:
 - `DOWNLOAD_WORKER_CONCURRENCY`: concurrent server download jobs, default `1`.
 - `DOWNLOAD_DUPLICATE_CHECK`: skip known local files before queueing when possible, default `false`.
 - `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
-- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. The compose defaults match upstream Monochrome and can be overridden in `.env`.
+- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Deezer defaults match upstream Monochrome. Amazon is disabled by default in the server container because its Turnstile flow is browser-only unless `AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN` is configured.
 
 Enable Redis-backed queue state and cross-process locking:
 
@@ -169,7 +169,7 @@ If this repository is checked out next to your compose file as `./monochrome`, a
       DOWNLOAD_DUPLICATE_CHECK: "true"
       DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS: "30000"
       DOWNLOAD_TRANSIENT_MIN_AGE_MS: "900000"
-      AMAZON_MUSIC_ENABLED: "true"
+      AMAZON_MUSIC_ENABLED: "false"
       AMAZON_MUSIC_API_BASE_URL: https://amz.geeked.wtf
       AMAZON_MUSIC_CONVERTER_BASE_URL: https://t2a.geeked.wtf
       AMAZON_MUSIC_TURNSTILE_SITE_KEY: 0x4AAAAAADgxqF6QVMm0GLHH

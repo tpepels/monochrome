@@ -306,6 +306,42 @@ export class MonochromeResolverFacade {
                 localStorage.setItem(storageKey, String(this.env[envKey]));
             }
         }
+
+        this.applyServerRuntimeProviderGuards(localStorage);
+    }
+
+    applyServerRuntimeProviderGuards(localStorage) {
+        const hasBrowserTurnstile = typeof window !== 'undefined' && typeof document !== 'undefined';
+        const bypassToken =
+            this.env?.AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN ||
+            localStorage.getItem('amazon-music-turnstile-bypass-token');
+
+        if (!hasBrowserTurnstile && !String(bypassToken || '').trim()) {
+            localStorage.setItem('amazon-music-enabled', 'false');
+            localStorage.removeItem('amazon-music-turnstile-site-key');
+        }
+    }
+
+    async initializeHiFiClient(localStorage) {
+        const { HiFiClient } = await import('../../js/HiFi.ts');
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        try {
+            await HiFiClient.initialize({
+                storage: [localStorage],
+                token: localStorage.getItem('hifi_token') || undefined,
+                tokenExpiry: Number.parseInt(localStorage.getItem('hifi_token_expiry') || '0', 10),
+                refreshToken: localStorage.getItem('hifi_refresh_token') || undefined,
+                signal: controller.signal,
+            });
+        } catch (error) {
+            if (!String(error?.message || '').includes('already initialized')) {
+                console.warn('Failed to initialize server HiFiClient:', error);
+            }
+        } finally {
+            clearTimeout(timeout);
+        }
     }
 
     async getApi() {
@@ -323,6 +359,7 @@ export class MonochromeResolverFacade {
                 import('../../js/api.js'),
                 import('../../js/storage.js'),
             ]);
+            await this.initializeHiFiClient(localStorage);
             return new LosslessAPI(apiSettings);
         })();
         return this.apiPromise;
