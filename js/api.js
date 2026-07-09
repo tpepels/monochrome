@@ -1882,17 +1882,30 @@ export class LosslessAPI {
         if (!baseUrl) return null;
         const format = this.getDeezerStreamFormat(quality);
         const url = `${baseUrl}/stream/?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`;
+        const localProxyUrl = `/api/provider/deezer/stream?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`;
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 12000);
             const res = await fetch(getProxyUrl(url), { method: 'HEAD', signal: controller.signal });
             clearTimeout(timeoutId);
-            if (!res.ok && res.status !== 405 && res.status !== 501) return null;
+            if (res.ok || res.status === 405 || res.status === 501) {
+                return { url, format, provider: 'deezer', rgInfo: null };
+            }
         } catch (e) {
             console.warn(`Deezer fallback failed for ISRC ${isrc}:`, e);
+        }
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 12000);
+            const res = await fetch(localProxyUrl, { method: 'HEAD', signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (!res.ok && res.status !== 405 && res.status !== 501) return null;
+            return { url: localProxyUrl, sourceUrl: url, format, provider: 'deezer', rgInfo: null };
+        } catch (e) {
+            console.warn(`Local Deezer proxy failed for ISRC ${isrc}:`, e);
             return null;
         }
-        return { url, format, provider: 'deezer', rgInfo: null };
     }
 
     getAmazonMusicQuality(quality = 'LOSSLESS', { preferAdaptiveAuto = false } = {}) {
@@ -2607,7 +2620,15 @@ export class LosslessAPI {
 
             let turnstileJwtPromise = null;
             const bypassToken = amazonMusicSettings.getTurnstileBypassToken().trim();
+            const defaultSiteKey = amazonMusicSettings.DEFAULT_TURNSTILE_SITE_KEY;
+            const siteKey = amazonMusicSettings.getTurnstileSiteKey().trim();
+            const currentOrigin = typeof window !== 'undefined' ? window.location?.origin : '';
+            const canUseDefaultTurnstile =
+                siteKey !== defaultSiteKey ||
+                currentOrigin === 'https://monochrome.tf' ||
+                currentOrigin === 'https://www.monochrome.tf';
             if (!bypassToken) {
+                if (!canUseDefaultTurnstile) return null;
                 turnstileJwtPromise = this.getTurnstileJwt().catch(() => null);
             }
 
@@ -2716,7 +2737,14 @@ export class LosslessAPI {
             return result;
         }
 
-        if (amazonMusicSettings?.isEnabled() && !amazonMusicSettings.getTurnstileBypassToken().trim()) {
+        if (
+            amazonMusicSettings?.isEnabled() &&
+            !amazonMusicSettings.getTurnstileBypassToken().trim() &&
+            (amazonMusicSettings.getTurnstileSiteKey().trim() !== amazonMusicSettings.DEFAULT_TURNSTILE_SITE_KEY ||
+                (typeof window !== 'undefined' &&
+                    (window.location?.origin === 'https://monochrome.tf' ||
+                        window.location?.origin === 'https://www.monochrome.tf')))
+        ) {
             this.getTurnstileJwt().catch(() => null);
         }
 

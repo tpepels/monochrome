@@ -9,6 +9,7 @@ import { onRequest as cancelDownloadRequest } from '../functions/api/downloads/[
 import { onRequest as retryDownloadRequest } from '../functions/api/downloads/[jobId]/retry.js';
 import { onRequest as sweepDownloadsRequest } from '../functions/api/downloads/maintenance/sweep.js';
 import { jsonResponse } from './downloads/http.js';
+import { proxyDeezerStream } from './provider-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.PORT || '4173', 10);
@@ -165,6 +166,11 @@ async function serveStatic(incoming, outgoing) {
 
 const server = http.createServer(async (incoming, outgoing) => {
     try {
+        if (incoming.url?.startsWith('/api/provider/deezer/stream')) {
+            await proxyDeezerStream(incoming, outgoing);
+            return;
+        }
+
         if (incoming.url?.startsWith('/api/')) {
             await writeFetchResponse(outgoing, await handleApi(await toFetchRequest(incoming)));
             return;
