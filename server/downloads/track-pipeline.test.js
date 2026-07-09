@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { executeTrackDownload } from './track-pipeline.js';
 
 let root;
@@ -108,9 +108,32 @@ test('downloads a valid direct URL to temp, validates it, and publishes final fi
     await expect(fs.stat(path.join(config.tempRoot, 'job1'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('uses the allowed origin headers for Deezer server-side downloads', async () => {
+test('streams audio responses without reading the response arrayBuffer', async () => {
+    const response = new Response(wavBuffer({ durationSeconds: 2 }));
+    response.arrayBuffer = vi.fn(async () => {
+        throw new Error('arrayBuffer should not be used for audio downloads');
+    });
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-streaming',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => response,
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(response.arrayBuffer).not.toHaveBeenCalled();
+});
+
+test('uses the configured allowed origin headers for Deezer server-side downloads', async () => {
     const calls = [];
-    const deezerUrl = 'https://dzr.tabs-vs-spaces.wtf/stream/?isrc=USWB12600223&format=FLAC';
+    const deezerUrl = 'https://dzr.example/stream/?isrc=USWB12600223&format=FLAC';
 
     await executeTrackDownload({
         id: 'track1',
@@ -125,6 +148,10 @@ test('uses the allowed origin headers for Deezer server-side downloads', async (
                 streamUrl: deezerUrl,
             })
         ),
+        env: {
+            DEEZER_FALLBACK_API_BASE_URL: 'https://dzr.example',
+            DEEZER_FALLBACK_ALLOWED_ORIGIN: 'https://allowed.example',
+        },
         fetchImpl: async (url, options) => {
             calls.push({ url: String(url), headers: options.headers });
             return new Response(wavBuffer({ durationSeconds: 2 }));
@@ -133,8 +160,35 @@ test('uses the allowed origin headers for Deezer server-side downloads', async (
     });
 
     expect(calls[0].url).toBe(deezerUrl);
-    expect(calls[0].headers.origin).toBe('https://monochrome.tf');
-    expect(calls[0].headers.referer).toBe('https://monochrome.tf/');
+    expect(calls[0].headers.origin).toBe('https://allowed.example');
+    expect(calls[0].headers.referer).toBe('https://allowed.example/');
+});
+
+test('does not add Deezer origin headers to unrelated audio hosts', async () => {
+    const calls = [];
+
+    await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-no-deezer-origin',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack({ streamUrl: 'https://cdn.test/audio.wav' })),
+        env: {
+            DEEZER_FALLBACK_API_BASE_URL: 'https://dzr.example',
+            DEEZER_FALLBACK_ALLOWED_ORIGIN: 'https://allowed.example',
+        },
+        fetchImpl: async (url, options) => {
+            calls.push({ url: String(url), headers: options.headers });
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(calls[0].headers.origin).toBeUndefined();
+    expect(calls[0].headers.referer).toBeUndefined();
 });
 
 test('rejects preview-only tracks before fetching audio', async () => {

@@ -165,11 +165,18 @@ test('stages all tracks and publishes the complete album with cover atomically',
     };
     const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
     const progress = [];
+    const fsOps = {
+        ...fs,
+        async cp() {
+            throw new Error('album publish should not copy the full staging directory');
+        },
+    };
 
     const result = await executeAlbumDownload({
         id: 'album1',
         jobId: 'job1',
         config,
+        fsOps,
         resolver: resolverFor(albumResult()),
         trackExecutor: successfulTrackExecutor({ seenFinalDir: finalAlbumDir }),
         fetchImpl: coverFetch(),
@@ -182,6 +189,9 @@ test('stages all tracks and publishes the complete album with cover atomically',
     await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
     await expect(fs.readFile(path.join(finalAlbumDir, 'cover.jpg'), 'utf8')).resolves.toBe('cover');
     await expect(fs.stat(path.join(config.tempRoot, 'job1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job1'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
     expect(progress).toContain('processing');
     expect(progress).toContain('publishing');
     expect(progress).toContain('completed');
@@ -310,6 +320,9 @@ test('cancellation during staging removes staging and never publishes final albu
         code: 'ENOENT',
     });
     await expect(fs.stat(path.join(config.tempRoot, 'job-cancel'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-cancel'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
 });
 
 test('cancellation during publication restores the previous album without a mixed directory', async () => {

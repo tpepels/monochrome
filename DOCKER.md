@@ -134,7 +134,7 @@ Common variables:
 - `REDIS_URL`: optional Redis queue backend, for example `redis://monochrome-redis:6379`.
 - `DOWNLOAD_INSTANCE_DISCOVERY`: opt into upstream uptime worker discovery, default `false`. The server uses static Monochrome-compatible defaults by default so downloads do not stall when `tidal-uptime.geeked.wtf` is unreachable from the container.
 - `TIDAL_CLIENT_ID`, `TIDAL_CLIENT_SECRET`, `TIDAL_ACCESS_TOKEN`, `TIDAL_TOKEN_EXPIRY`, `TIDAL_REFRESH_TOKEN`: optional upstream HiFi/TIDAL credentials for native TIDAL manifest fallback. Client credentials alone may only return preview streams; an account-backed token is needed for full streams when Amazon/Qobuz/Deezer miss.
-- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Defaults match upstream Monochrome. In server-side downloads, Amazon can use `AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN`; without it, the upstream Amazon Turnstile branch returns no server token and Monochrome continues to the next upstream fallback.
+- `AMAZON_MUSIC_*` and `DEEZER_FALLBACK_*`: optional upstream provider settings passed to Monochrome's existing resolver flow. Defaults match upstream Monochrome. `DEEZER_FALLBACK_ALLOWED_ORIGIN` controls the server-side origin/referer used for the configured Deezer fallback host and defaults to `https://monochrome.tf`. In server-side downloads, Amazon can use `AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN`; without it, the upstream Amazon Turnstile branch returns no server token and Monochrome continues to the next upstream fallback.
 
 Enable Redis-backed queue state and cross-process locking:
 
@@ -178,6 +178,7 @@ If this repository is checked out next to your compose file as `./monochrome`, a
       AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN: ""
       DEEZER_FALLBACK_ENABLED: "true"
       DEEZER_FALLBACK_API_BASE_URL: https://dzr.tabs-vs-spaces.wtf
+      DEEZER_FALLBACK_ALLOWED_ORIGIN: https://monochrome.tf
     volumes:
       - /srv/completed/music:/data/music
       - /srv/monochrome/tmp:/tmp/monochrome-downloads

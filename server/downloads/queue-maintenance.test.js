@@ -165,13 +165,26 @@ test('sweeps stale temp, publishing, and backup dirs while skipping active and f
     const staleBackup = path.join(artistDir, '.Album.backup-old-job-abcd');
     const activePublishing = path.join(artistDir, '.Album.publishing-active-job-abcd');
     const freshBackup = path.join(artistDir, '.Album.backup-fresh-job-abcd');
+    const staleLibraryStaging = path.join(cfg.downloadRoot, '.monochrome-staging', 'old-job');
+    const activeLibraryStaging = path.join(cfg.downloadRoot, '.monochrome-staging', 'active-job');
+    const freshLibraryStaging = path.join(cfg.downloadRoot, '.monochrome-staging', 'fresh-job');
     const oldDate = new Date(Date.now() - 60 * 60 * 1000);
 
-    for (const dir of [staleTemp, activeTemp, stalePublishing, staleBackup, activePublishing, freshBackup]) {
+    for (const dir of [
+        staleTemp,
+        activeTemp,
+        stalePublishing,
+        staleBackup,
+        activePublishing,
+        freshBackup,
+        staleLibraryStaging,
+        activeLibraryStaging,
+        freshLibraryStaging,
+    ]) {
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(path.join(dir, 'marker'), 'x');
     }
-    for (const dir of [staleTemp, activeTemp, stalePublishing, staleBackup, activePublishing]) {
+    for (const dir of [staleTemp, activeTemp, stalePublishing, staleBackup, activePublishing, staleLibraryStaging, activeLibraryStaging]) {
         await fs.utimes(dir, oldDate, oldDate);
     }
 
@@ -181,7 +194,7 @@ test('sweeps stale temp, publishing, and backup dirs while skipping active and f
         dryRun: true,
         nowMs: Date.now(),
     });
-    expect(dryRun.actions.filter((action) => action.action === 'would-remove')).toHaveLength(3);
+    expect(dryRun.actions.filter((action) => action.action === 'would-remove')).toHaveLength(4);
     await expect(fs.stat(staleTemp)).resolves.toBeTruthy();
 
     const result = await sweepDownloadTransients({
@@ -192,10 +205,14 @@ test('sweeps stale temp, publishing, and backup dirs while skipping active and f
     });
 
     expect(result.actions.some((action) => action.reason === 'stale-temp-job-dir')).toBe(true);
+    expect(result.actions.some((action) => action.reason === 'stale-library-staging-dir')).toBe(true);
     await expect(fs.stat(staleTemp)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(stalePublishing)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(staleBackup)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(staleLibraryStaging)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(activeTemp)).resolves.toBeTruthy();
     await expect(fs.stat(activePublishing)).resolves.toBeTruthy();
+    await expect(fs.stat(activeLibraryStaging)).resolves.toBeTruthy();
     await expect(fs.stat(freshBackup)).resolves.toBeTruthy();
+    await expect(fs.stat(freshLibraryStaging)).resolves.toBeTruthy();
 });

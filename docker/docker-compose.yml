@@ -40,6 +40,7 @@ services:
             AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN: ${AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN:-}
             DEEZER_FALLBACK_ENABLED: ${DEEZER_FALLBACK_ENABLED:-true}
             DEEZER_FALLBACK_API_BASE_URL: ${DEEZER_FALLBACK_API_BASE_URL:-https://dzr.tabs-vs-spaces.wtf}
+            DEEZER_FALLBACK_ALLOWED_ORIGIN: ${DEEZER_FALLBACK_ALLOWED_ORIGIN:-https://monochrome.tf}
         volumes:
             - '${MONOCHROME_MUSIC_DIR:-../music}:/data/music'
             - monochrome_download_tmp:/tmp/monochrome-downloads

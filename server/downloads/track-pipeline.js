@@ -2,9 +2,12 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { getDownloadsConfig } from './config.js';
 import { createResolverAdapter, inspectManifest } from './resolver-adapter.js';
+import { withDeezerFallbackHeaders } from '../provider-headers.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,8 +19,6 @@ const BROWSER_LIKE_HEADERS = Object.freeze({
     'user-agent':
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36',
 });
-
-const DEEZER_ALLOWED_ORIGIN = 'https://monochrome.tf';
 
 const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
@@ -314,30 +315,20 @@ function resolveDownloadUrls(resolved) {
     return [];
 }
 
-function headersForAudioUrl(url) {
-    const headers = { ...BROWSER_LIKE_HEADERS };
-    try {
-        const parsed = new URL(url);
-        if (parsed.hostname === 'dzr.tabs-vs-spaces.wtf') {
-            headers.origin = DEEZER_ALLOWED_ORIGIN;
-            headers.referer = `${DEEZER_ALLOWED_ORIGIN}/`;
-        }
-    } catch {
-        // Keep generic browser-like headers for non-URL strings.
-    }
-    return headers;
+function headersForAudioUrl(url, env = {}) {
+    return withDeezerFallbackHeaders(url, BROWSER_LIKE_HEADERS, env);
 }
 
-async function fetchAudioUrl(url, { fetchImpl = fetch, signal } = {}) {
+async function fetchAudioUrl(url, { fetchImpl = fetch, signal, env = {} } = {}) {
     let response = await fetchImpl(url, {
-        headers: headersForAudioUrl(url),
+        headers: headersForAudioUrl(url, env),
         cache: 'no-store',
         signal,
     });
 
     if (!response.ok) {
         response = await fetchImpl(url, {
-            headers: headersForAudioUrl(url),
+            headers: headersForAudioUrl(url, env),
             cache: 'no-store',
             signal,
         });
@@ -347,21 +338,37 @@ async function fetchAudioUrl(url, { fetchImpl = fetch, signal } = {}) {
         throw pipelineError(`CDN fetch failed: HTTP ${response.status}`, 'CDN_FETCH_FAILED', { status: response.status, url });
     }
 
-    return Buffer.from(await response.arrayBuffer());
+    return response;
 }
 
-async function downloadToTempFile(resolved, tempFile, { fetchImpl = fetch, fsOps = fs, signal } = {}) {
+async function writeResponseBodyToFile(response, filePath, { fsOps = fs, append = false } = {}) {
+    if (!response.body) {
+        await fsOps.writeFile(filePath, Buffer.alloc(0), { flag: append ? 'a' : 'w' });
+        return;
+    }
+
+    const handle = await fsOps.open(filePath, append ? 'a' : 'w');
+    let stream = null;
+    try {
+        stream = handle.createWriteStream({ autoClose: true });
+        await pipeline(Readable.fromWeb(response.body), stream);
+    } catch (error) {
+        stream?.destroy?.();
+        await handle.close().catch(() => {});
+        throw error;
+    }
+}
+
+async function downloadToTempFile(resolved, tempFile, { fetchImpl = fetch, fsOps = fs, signal, env = {} } = {}) {
     const urls = resolveDownloadUrls(resolved);
     if (!urls.length) {
         throw pipelineError('Resolved track has no downloadable URL or segment manifest', 'NO_DOWNLOAD_URL');
     }
 
-    const chunks = [];
-    for (const url of urls) {
-        chunks.push(await fetchAudioUrl(url, { fetchImpl, signal }));
+    for (let index = 0; index < urls.length; index++) {
+        const response = await fetchAudioUrl(urls[index], { fetchImpl, signal, env });
+        await writeResponseBodyToFile(response, tempFile, { fsOps, append: index > 0 });
     }
-
-    await fsOps.writeFile(tempFile, Buffer.concat(chunks));
 }
 
 async function decryptCencAudioFile(encryptedFile, outputFile, resolved, { fsOps = fs } = {}) {
@@ -523,12 +530,12 @@ export async function executeTrackDownload({
                     urls: [],
                 },
                 encryptedFile,
-                { fetchImpl, fsOps, signal }
+                { fetchImpl, fsOps, signal, env }
             );
             await decryptCencAudioFile(encryptedFile, tempFile, resolved, { fsOps });
             await fsOps.rm(encryptedFile, { force: true }).catch(() => {});
         } else {
-            await downloadToTempFile(resolved, tempFile, { fetchImpl, fsOps, signal });
+            await downloadToTempFile(resolved, tempFile, { fetchImpl, fsOps, signal, env });
         }
         let validation = await validateAudioFile(tempFile, resolved, { fsOps });
 

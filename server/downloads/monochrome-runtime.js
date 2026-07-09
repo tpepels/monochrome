@@ -93,6 +93,7 @@ export function applyResolverEnv(localStorage, env = {}) {
         ['AMAZON_MUSIC_TURNSTILE_BYPASS_TOKEN', 'amazon-music-turnstile-bypass-token'],
         ['DEEZER_FALLBACK_ENABLED', 'deezer-fallback-enabled'],
         ['DEEZER_FALLBACK_API_BASE_URL', 'deezer-fallback-api-base-url'],
+        ['DEEZER_FALLBACK_ALLOWED_ORIGIN', 'deezer-fallback-allowed-origin'],
     ];
 
     for (const [envKey, storageKey] of envToStorage) {

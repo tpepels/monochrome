@@ -5,6 +5,7 @@ import { getDownloadsConfig } from './config.js';
 import { InMemoryMaintenanceLock } from './maintenance.js';
 import { createResolverAdapter } from './resolver-adapter.js';
 import { executeTrackDownload } from './track-pipeline.js';
+import { LIBRARY_STAGING_DIR } from './constants.js';
 
 const COVER_HEADERS = Object.freeze({
     accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
@@ -132,7 +133,7 @@ async function publishAlbumDirectory({
 
     try {
         await fsOps.rm(publishingDir, { recursive: true, force: true });
-        await fsOps.cp(stagingAlbumDir, publishingDir, { recursive: true });
+        await fsOps.rename(stagingAlbumDir, publishingDir);
         assertNotAborted(signal);
 
         if (await pathExists(finalAlbumDir, fsOps)) {
@@ -190,7 +191,8 @@ export async function executeAlbumDownload({
     }
 
     const albumTempRoot = path.join(config.tempRoot, String(jobId));
-    const stagingRoot = path.join(albumTempRoot, 'staging');
+    const libraryStagingRoot = path.join(config.downloadRoot, LIBRARY_STAGING_DIR, String(jobId));
+    const stagingRoot = path.join(libraryStagingRoot, 'staging');
     const trackTempRoot = path.join(albumTempRoot, 'tracks-temp');
     let albumResult = null;
 
@@ -212,6 +214,7 @@ export async function executeAlbumDownload({
             };
         }
 
+        await fsOps.rm(libraryStagingRoot, { recursive: true, force: true });
         await fsOps.mkdir(stagingAlbumDir, { recursive: true });
         onProgress?.({ phase: 'processing', totalTracks: albumResult.tracks.length, completedTracks: 0 });
 
@@ -314,5 +317,6 @@ export async function executeAlbumDownload({
         throw error;
     } finally {
         await fsOps.rm(albumTempRoot, { recursive: true, force: true }).catch(() => {});
+        await fsOps.rm(libraryStagingRoot, { recursive: true, force: true }).catch(() => {});
     }
 }

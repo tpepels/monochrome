@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { getDownloadsConfig } from './config.js';
+import { LIBRARY_STAGING_DIR } from './constants.js';
 
 function maintenanceError(message, failureCode, details = {}) {
     const error = new Error(message);
@@ -157,12 +158,49 @@ async function sweepTempRoot({ tempRoot, activeJobIds, minAgeMs, nowMs, dryRun, 
     }
 }
 
+async function sweepLibraryStagingRoot({ stagingRoot, activeJobIds, minAgeMs, nowMs, dryRun, fsOps, actions }) {
+    if (!stagingRoot || !(await pathExists(stagingRoot, fsOps))) return;
+
+    const entries = await fsOps.readdir(stagingRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const fullPath = path.join(stagingRoot, entry.name);
+
+        if (isActiveTransient(entry.name, activeJobIds)) {
+            actions.push({ action: 'skipped-active', path: fullPath, reason: 'active-library-staging-dir' });
+            continue;
+        }
+
+        const stat = await fsOps.stat(fullPath).catch(() => null);
+        if (!stat) continue;
+        if (nowMs - stat.mtimeMs < minAgeMs) {
+            actions.push({ action: 'skipped-fresh', path: fullPath, reason: 'too-fresh' });
+            continue;
+        }
+
+        await removePath(fullPath, { fsOps, dryRun, actions, reason: 'stale-library-staging-dir' });
+    }
+}
+
 async function sweepLibraryTransients({ root, activeJobIds, minAgeMs, nowMs, dryRun, fsOps, actions }) {
     if (!root || !(await pathExists(root, fsOps))) return;
 
     const entries = await fsOps.readdir(root, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
         const fullPath = path.join(root, entry.name);
+        if (entry.isDirectory() && entry.name === LIBRARY_STAGING_DIR) {
+            await sweepLibraryStagingRoot({
+                stagingRoot: fullPath,
+                activeJobIds,
+                minAgeMs,
+                nowMs,
+                dryRun,
+                fsOps,
+                actions,
+            });
+            continue;
+        }
+
         if (entry.isDirectory() && isTransientAlbumDir(entry.name)) {
             if (isActiveTransient(entry.name, activeJobIds)) {
                 actions.push({ action: 'skipped-active', path: fullPath, reason: 'active-publication' });

@@ -1,7 +1,6 @@
 import { Readable } from 'node:stream';
-
-const DEEZER_ALLOWED_ORIGIN = 'https://monochrome.tf';
-const DEFAULT_DEEZER_BASE_URL = 'https://dzr.tabs-vs-spaces.wtf';
+import { pipeline } from 'node:stream/promises';
+import { getDeezerFallbackBaseUrl, withDeezerFallbackHeaders } from './provider-headers.js';
 
 function isEnabled(value) {
     return !['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
@@ -22,7 +21,7 @@ export function buildDeezerProxyTarget(requestUrl, env = {}) {
         throw error;
     }
 
-    const baseUrl = String(env.DEEZER_FALLBACK_API_BASE_URL || DEFAULT_DEEZER_BASE_URL).replace(/\/+$/, '');
+    const baseUrl = getDeezerFallbackBaseUrl(env);
     const target = new URL('/stream/', `${baseUrl}/`);
     target.searchParams.set('isrc', isrc);
     target.searchParams.set('format', format || 'FLAC');
@@ -51,12 +50,14 @@ export async function proxyDeezerStream(incoming, outgoing, { env = process.env,
         return;
     }
 
-    const headers = {
-        accept: incoming.headers.accept || '*/*',
-        origin: DEEZER_ALLOWED_ORIGIN,
-        referer: `${DEEZER_ALLOWED_ORIGIN}/`,
-        'user-agent': incoming.headers['user-agent'] || 'Monochrome server proxy',
-    };
+    const headers = withDeezerFallbackHeaders(
+        target,
+        {
+            accept: incoming.headers.accept || '*/*',
+            'user-agent': incoming.headers['user-agent'] || 'Monochrome server proxy',
+        },
+        env
+    );
     if (incoming.headers.range) headers.range = incoming.headers.range;
 
     const response = await fetchImpl(target, {
@@ -83,5 +84,15 @@ export async function proxyDeezerStream(incoming, outgoing, { env = process.env,
         return;
     }
 
-    Readable.fromWeb(response.body).pipe(outgoing);
+    try {
+        await pipeline(Readable.fromWeb(response.body), outgoing);
+    } catch (error) {
+        if (outgoing.destroyed || outgoing.writableEnded) return;
+        if (outgoing.headersSent) {
+            outgoing.destroy?.(error);
+            return;
+        }
+        outgoing.writeHead(502, { 'content-type': 'application/json;charset=UTF-8' });
+        outgoing.end(JSON.stringify({ success: false, error: 'Deezer proxy stream failed' }));
+    }
 }
