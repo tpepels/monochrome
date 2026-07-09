@@ -242,6 +242,7 @@ export async function executeAlbumDownload({
                     fetchImpl,
                     fsOps,
                     metadataEmbedder,
+                    relativeDirectory: albumRelativePath,
                     signal,
                 });
             } catch (error) {

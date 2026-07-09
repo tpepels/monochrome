@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { executeAlbumDownload, InMemoryPublishLock } from './album-pipeline.js';
+import { executeTrackDownload } from './track-pipeline.js';
 
 let root;
 
@@ -77,6 +78,86 @@ function coverFetch() {
     };
 }
 
+function wavBuffer({ durationSeconds = 2, sampleRate = 8000 } = {}) {
+    const channels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * channels * (bitsPerSample / 8);
+    const blockAlign = channels * (bitsPerSample / 8);
+    const dataSize = durationSeconds * byteRate;
+    const buffer = Buffer.alloc(44 + dataSize);
+
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(channels, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(byteRate, 28);
+    buffer.writeUInt16LE(blockAlign, 32);
+    buffer.writeUInt16LE(bitsPerSample, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    return buffer;
+}
+
+function albumResolverWithTrackMetadataMismatch() {
+    const tracks = new Map([
+        [
+            't1',
+            {
+                id: 't1',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t1.wav',
+                manifest: null,
+                manifestDetails: { kind: 'unknown', urls: [], streamUrl: null, dash: null },
+                urls: [],
+                duration: 2,
+                isPreview: false,
+                presentationFlags: { assetPresentation: 'FULL', trackPresentation: 'FULL', isPreview: false },
+                metadata: {
+                    id: 't1',
+                    title: 'One',
+                    trackNumber: 1,
+                    artist: { name: 'Track Artist' },
+                    album: { title: 'Different Track Album', artist: { name: 'Different Track Artist' } },
+                },
+            },
+        ],
+        [
+            't2',
+            {
+                id: 't2',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t2.wav',
+                manifest: null,
+                manifestDetails: { kind: 'unknown', urls: [], streamUrl: null, dash: null },
+                urls: [],
+                duration: 2,
+                isPreview: false,
+                presentationFlags: { assetPresentation: 'FULL', trackPresentation: 'FULL', isPreview: false },
+                metadata: {
+                    id: 't2',
+                    title: 'Two',
+                    trackNumber: 2,
+                    artist: { name: 'Track Artist' },
+                    album: { title: 'Different Track Album', artist: { name: 'Different Track Artist' } },
+                },
+            },
+        ],
+    ]);
+
+    return {
+        async resolveAlbum() {
+            return albumResult();
+        },
+        async resolveTrackDownload(id) {
+            return tracks.get(id);
+        },
+    };
+}
+
 test('stages all tracks and publishes the complete album with cover atomically', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
@@ -104,6 +185,37 @@ test('stages all tracks and publishes the complete album with cover atomically',
     expect(progress).toContain('processing');
     expect(progress).toContain('publishing');
     expect(progress).toContain('completed');
+});
+
+test('forces track files into the album metadata directory even when track metadata differs', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    const fetchImpl = async (url) => {
+        if (String(url).startsWith('https://cdn.test/')) {
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        }
+        return coverFetch()(url);
+    };
+
+    await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-normalize-path',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor: executeTrackDownload,
+        fetchImpl,
+        metadataEmbedder: async () => ({ embedded: true, method: 'test' }),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(config.downloadRoot, 'Different Track Artist'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
 });
 
 test('one failed track fails the album and leaves no final album directory', async () => {

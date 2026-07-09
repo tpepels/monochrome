@@ -77,12 +77,16 @@ function getTrackNumber(track) {
     return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
+export function buildTrackFileName(track, extension) {
+    const trackNumber = String(getTrackNumber(track)).padStart(2, '0');
+    const title = sanitizePathComponent(getTrackTitle(track), 'Unknown Title');
+    return `${trackNumber} - ${title}.${extension}`;
+}
+
 export function buildTrackRelativePath(track, extension) {
     const artist = sanitizePathComponent(getAlbumArtistName(track), 'Unknown Artist');
     const album = sanitizePathComponent(getAlbumTitle(track), 'Unknown Album');
-    const trackNumber = String(getTrackNumber(track)).padStart(2, '0');
-    const title = sanitizePathComponent(getTrackTitle(track), 'Unknown Title');
-    return path.join(artist, album, `${trackNumber} - ${title}.${extension}`);
+    return path.join(artist, album, buildTrackFileName(track, extension));
 }
 
 function assertSafeRelativePath(relativePath) {
@@ -472,6 +476,7 @@ export async function executeTrackDownload({
     fsOps = fs,
     metadataEmbedder = defaultMetadataEmbedder,
     conflictPolicy = 'overwrite_if_different',
+    relativeDirectory = null,
     signal,
 } = {}) {
     if (!id) {
@@ -515,7 +520,10 @@ export async function executeTrackDownload({
         const metadataResult = await metadataEmbedder(tempFile, metadata, { resolved, fsOps, signal });
         validation = await validateAudioFile(tempFile, resolved, { fsOps });
 
-        const relativePath = buildTrackRelativePath(resolved.metadata, validation.extension || defaultExtensionForQuality(quality));
+        const extension = validation.extension || defaultExtensionForQuality(quality);
+        const relativePath = relativeDirectory
+            ? path.join(relativeDirectory, buildTrackFileName(resolved.metadata, extension))
+            : buildTrackRelativePath(resolved.metadata, extension);
         const publication = await finalizeTrack(
             tempFile,
             relativePath,
