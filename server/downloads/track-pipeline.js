@@ -17,6 +17,8 @@ const BROWSER_LIKE_HEADERS = Object.freeze({
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36',
 });
 
+const DEEZER_ALLOWED_ORIGIN = 'https://monochrome.tf';
+
 const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
 
@@ -312,16 +314,30 @@ function resolveDownloadUrls(resolved) {
     return [];
 }
 
+function headersForAudioUrl(url) {
+    const headers = { ...BROWSER_LIKE_HEADERS };
+    try {
+        const parsed = new URL(url);
+        if (parsed.hostname === 'dzr.tabs-vs-spaces.wtf') {
+            headers.origin = DEEZER_ALLOWED_ORIGIN;
+            headers.referer = `${DEEZER_ALLOWED_ORIGIN}/`;
+        }
+    } catch {
+        // Keep generic browser-like headers for non-URL strings.
+    }
+    return headers;
+}
+
 async function fetchAudioUrl(url, { fetchImpl = fetch, signal } = {}) {
     let response = await fetchImpl(url, {
-        headers: BROWSER_LIKE_HEADERS,
+        headers: headersForAudioUrl(url),
         cache: 'no-store',
         signal,
     });
 
     if (!response.ok) {
         response = await fetchImpl(url, {
-            headers: BROWSER_LIKE_HEADERS,
+            headers: headersForAudioUrl(url),
             cache: 'no-store',
             signal,
         });

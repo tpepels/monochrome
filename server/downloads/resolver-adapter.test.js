@@ -1,5 +1,10 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MonochromeResolverFacade, ServerResolverAdapter, inspectManifest } from './resolver-adapter.js';
+import { installServerLocalStorage } from './monochrome-runtime.js';
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+});
 
 describe('server resolver adapter', () => {
     test('delegates resolution through the injected Monochrome resolver facade', async () => {
@@ -201,5 +206,33 @@ describe('server resolver adapter', () => {
 
         expect(inspected.kind).toBe('json-urls');
         expect(inspected.streamUrl).toBe('https://x/flac.flac');
+    });
+
+    test('server-side Deezer lookup uses provider URL with allowed origin headers', async () => {
+        const storage = installServerLocalStorage({});
+        storage.setItem('deezer-fallback-enabled', 'true');
+        storage.setItem('deezer-fallback-api-base-url', 'https://dzr.tabs-vs-spaces.wtf');
+
+        vi.stubGlobal('localStorage', storage);
+        vi.stubGlobal('window', undefined);
+
+        const { LosslessAPI } = await import('../../js/api.js');
+        const api = new LosslessAPI({});
+        const calls = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url, options) => {
+                calls.push({ url: String(url), options });
+                return Promise.resolve(new Response(null, { status: 200 }));
+            })
+        );
+
+        const result = await api.getDeezerStreamUrl('GX7TZ2600001', 'LOSSLESS');
+
+        expect(result.url).toBe('https://dzr.tabs-vs-spaces.wtf/stream/?isrc=GX7TZ2600001&format=FLAC');
+        expect(calls).toHaveLength(1);
+        expect(calls[0].url).toBe(result.url);
+        expect(calls[0].options.headers.origin).toBe('https://monochrome.tf');
+        expect(calls[0].options.headers.referer).toBe('https://monochrome.tf/');
     });
 });

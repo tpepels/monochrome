@@ -108,6 +108,35 @@ test('downloads a valid direct URL to temp, validates it, and publishes final fi
     await expect(fs.stat(path.join(config.tempRoot, 'job1'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+test('uses the allowed origin headers for Deezer server-side downloads', async () => {
+    const calls = [];
+    const deezerUrl = 'https://dzr.tabs-vs-spaces.wtf/stream/?isrc=USWB12600223&format=FLAC';
+
+    await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-deezer-origin',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(
+            resolvedTrack({
+                streamUrl: deezerUrl,
+            })
+        ),
+        fetchImpl: async (url, options) => {
+            calls.push({ url: String(url), headers: options.headers });
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(calls[0].url).toBe(deezerUrl);
+    expect(calls[0].headers.origin).toBe('https://monochrome.tf');
+    expect(calls[0].headers.referer).toBe('https://monochrome.tf/');
+});
+
 test('rejects preview-only tracks before fetching audio', async () => {
     let fetched = false;
     await expect(

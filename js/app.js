@@ -60,6 +60,15 @@ import { HiFiClient } from './HiFi.js';
 
 const AMAZON_DECRYPTER_SW_VERSION = '2026-06-23-flac-hls-v8';
 
+function canUseAmazonDefaultTurnstile() {
+    const siteKey = amazonMusicSettings.getTurnstileSiteKey().trim();
+    return (
+        siteKey !== amazonMusicSettings.DEFAULT_TURNSTILE_SITE_KEY ||
+        window.location?.origin === 'https://monochrome.tf' ||
+        window.location?.origin === 'https://www.monochrome.tf'
+    );
+}
+
 // Capture real iOS state before spoofing (needed for background audio)
 if (typeof window !== 'undefined') {
     const _ua = navigator.userAgent.toLowerCase();
@@ -569,7 +578,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await MusicAPI.initialize(apiSettings);
 
-    if (amazonMusicSettings.isEnabled() && !amazonMusicSettings.getTurnstileBypassToken().trim()) {
+    if (
+        amazonMusicSettings.isEnabled() &&
+        !amazonMusicSettings.getTurnstileBypassToken().trim() &&
+        canUseAmazonDefaultTurnstile()
+    ) {
         MusicAPI.instance.tidalAPI.getTurnstileJwt().catch(() => null);
     }
 

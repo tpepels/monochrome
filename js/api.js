@@ -1876,17 +1876,31 @@ export class LosslessAPI {
         return map[quality] || map[normalizeQualityToken(quality)] || 'FLAC';
     }
 
+    getDeezerRequestOptions({ method = 'HEAD', signal } = {}) {
+        const options = { method, signal };
+        if (typeof window === 'undefined') {
+            options.headers = {
+                origin: 'https://monochrome.tf',
+                referer: 'https://monochrome.tf/',
+            };
+        }
+        return options;
+    }
+
     async getDeezerStreamUrl(isrc, quality = 'LOSSLESS') {
         if (!isrc || !deezerFallbackSettings.isEnabled()) return null;
         const baseUrl = deezerFallbackSettings.getApiBaseUrl().replace(/\/+$/, '');
         if (!baseUrl) return null;
         const format = this.getDeezerStreamFormat(quality);
         const url = `${baseUrl}/stream/?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`;
-        const localProxyUrl = `/api/provider/deezer/stream?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`;
+        const canUseLocalProxy = typeof window !== 'undefined' && typeof window.location !== 'undefined';
+        const localProxyUrl = canUseLocalProxy
+            ? `/api/provider/deezer/stream?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`
+            : null;
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 12000);
-            const res = await fetch(getProxyUrl(url), { method: 'HEAD', signal: controller.signal });
+            const res = await fetch(getProxyUrl(url), this.getDeezerRequestOptions({ signal: controller.signal }));
             clearTimeout(timeoutId);
             if (res.ok || res.status === 405 || res.status === 501) {
                 return { url, format, provider: 'deezer', rgInfo: null };
@@ -1894,6 +1908,8 @@ export class LosslessAPI {
         } catch (e) {
             console.warn(`Deezer fallback failed for ISRC ${isrc}:`, e);
         }
+
+        if (!localProxyUrl) return null;
 
         try {
             const controller = new AbortController();
