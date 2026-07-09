@@ -1,7 +1,8 @@
-import { AUTH_BASE_URL } from './accounts/config.js';
+import { AUTH_BASE_URL, AUTH_ENABLED } from './accounts/config.js';
 
 function getPartySocketUrl() {
     if (window.__PARTY_WS_URL__) return window.__PARTY_WS_URL__;
+    if (!AUTH_ENABLED) throw new Error('Listening parties are not configured for this self-hosted instance');
     const url = new URL(AUTH_BASE_URL);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.pathname = '/api/parties/ws';
@@ -20,6 +21,7 @@ export class PartySocketClient {
     }
 
     async connect() {
+        if (!AUTH_ENABLED && !window.__PARTY_WS_URL__) return;
         if (this.socket?.readyState === WebSocket.OPEN) return;
         if (this.connected) return this.connected;
 

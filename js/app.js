@@ -69,6 +69,10 @@ function canUseAmazonDefaultTurnstile() {
     );
 }
 
+function isOfficialMonochromeOrigin() {
+    return window.location?.hostname === 'monochrome.tf' || window.location?.hostname === 'www.monochrome.tf';
+}
+
 // Capture real iOS state before spoofing (needed for background audio)
 if (typeof window !== 'undefined') {
     const _ua = navigator.userAgent.toLowerCase();
@@ -79,23 +83,25 @@ if (typeof window !== 'undefined') {
         },
     });
 
-    // analytics
-    const plausibleScript = document.createElement('script');
-    plausibleScript.async = true;
-    plausibleScript.src = 'https://plausible.canine.tools/js/pa-dCMvQpiD1-AJmi8o3xviO.js';
-    document.head.appendChild(plausibleScript);
+    if (isOfficialMonochromeOrigin()) {
+        // analytics
+        const plausibleScript = document.createElement('script');
+        plausibleScript.async = true;
+        plausibleScript.src = 'https://plausible.canine.tools/js/pa-dCMvQpiD1-AJmi8o3xviO.js';
+        document.head.appendChild(plausibleScript);
 
-    window.plausible =
-        window.plausible ||
-        function () {
-            (window.plausible.q = window.plausible.q || []).push(arguments);
-        };
-    window.plausible.init =
-        window.plausible.init ||
-        function (i) {
-            window.plausible.o = i || {};
-        };
-    window.plausible.init();
+        window.plausible =
+            window.plausible ||
+            function () {
+                (window.plausible.q = window.plausible.q || []).push(arguments);
+            };
+        window.plausible.init =
+            window.plausible.init ||
+            function (i) {
+                window.plausible.o = i || {};
+            };
+        window.plausible.init();
+    }
 }
 
 // Lazy-loaded modules

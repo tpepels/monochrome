@@ -1,7 +1,9 @@
-import { AUTH_BASE_URL } from './config.js';
+import { AUTH_BASE_URL, AUTH_ENABLED } from './config.js';
 import { getAuthToken } from './auth.js';
 
 export async function authApi(path, options = {}) {
+    if (!AUTH_ENABLED) throw new Error('Accounts are not configured for this self-hosted instance');
+
     const token = getAuthToken();
     const response = await fetch(`${AUTH_BASE_URL}${path}`, {
         credentials: 'include',

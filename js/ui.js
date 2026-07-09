@@ -35,7 +35,7 @@ import { db } from './db.js';
 import { getVibrantColorFromImage } from './vibrant-color.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { authManager } from './accounts/auth.js';
-import { AUTH_BASE_URL } from './accounts/config.js';
+import { AUTH_BASE_URL, AUTH_ENABLED } from './accounts/config.js';
 import { areListeningPartiesDisabled, partyManager } from './listening-party.js';
 import { Visualizer } from './visualizer.js';
 import { audioContextManager } from './audio-context.js';
@@ -2576,6 +2576,8 @@ export class UIRenderer {
     }
 
     async checkPartiesServerAvailable() {
+        if (!AUTH_ENABLED) return false;
+
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3000);
         try {

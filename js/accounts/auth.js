@@ -1,5 +1,5 @@
 // js/accounts/auth.js
-import { AUTH_BASE_URL, authClient } from './config.js';
+import { AUTH_BASE_URL, AUTH_ENABLED, authClient } from './config.js';
 
 const LEGACY_AUTH_TOKEN_KEY = 'monochrome-auth-token';
 const NATIVE_OAUTH_HANDLED_URLS_KEY = 'monochrome-native-oauth-handled-urls';
@@ -183,6 +183,8 @@ async function getSessionFromBearerToken() {
 }
 
 async function getCurrentSession() {
+    if (!AUTH_ENABLED) return null;
+
     if (isCapacitorNative() && getAuthToken()) {
         return getSessionFromBearerToken();
     }
@@ -295,6 +297,11 @@ export class AuthManager {
     }
 
     async _signInSocial(provider) {
+        if (!AUTH_ENABLED) {
+            alert('Accounts are not configured for this self-hosted instance');
+            return;
+        }
+
         try {
             const isNative = isCapacitorNative();
             const callbackURL = isNative ? getNativeOAuthCallbackURL() : window.location.origin + '/index.html';
@@ -341,6 +348,8 @@ export class AuthManager {
     }
 
     async signInWithEmail(email, password) {
+        if (!AUTH_ENABLED) throw new Error('Accounts are not configured for this self-hosted instance');
+
         try {
             const { data, error } = await authClient.signIn.email({ email, password });
             if (error) throw new Error(error.message);
@@ -358,6 +367,8 @@ export class AuthManager {
     }
 
     async signUpWithEmail(email, password) {
+        if (!AUTH_ENABLED) throw new Error('Accounts are not configured for this self-hosted instance');
+
         try {
             const { data, error } = await authClient.signUp.email({
                 email,
@@ -379,6 +390,8 @@ export class AuthManager {
     }
 
     async sendPasswordReset(email) {
+        if (!AUTH_ENABLED) throw new Error('Accounts are not configured for this self-hosted instance');
+
         try {
             const { error } = await authClient.requestPasswordReset({
                 email,
@@ -394,6 +407,8 @@ export class AuthManager {
     }
 
     async resetPassword(token, password, confirmPassword) {
+        if (!AUTH_ENABLED) throw new Error('Accounts are not configured for this self-hosted instance');
+
         if (password !== confirmPassword) {
             throw new Error('Passwords do not match');
         }
@@ -407,6 +422,14 @@ export class AuthManager {
     }
 
     async signOut() {
+        if (!AUTH_ENABLED) {
+            clearAuthToken();
+            this.user = null;
+            this.updateUI(null);
+            this.authListeners.forEach((listener) => listener(null));
+            return;
+        }
+
         try {
             await authClient.signOut();
         } catch (error) {
