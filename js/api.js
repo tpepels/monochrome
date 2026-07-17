@@ -1928,19 +1928,25 @@ export class LosslessAPI {
         const format = this.getDeezerStreamFormat(quality);
         const url = `${baseUrl}/stream/?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`;
         const canUseLocalProxy = typeof window !== 'undefined' && typeof window.location !== 'undefined';
+        const canUseDirectDeezer =
+            !canUseLocalProxy ||
+            window.location?.origin === 'https://monochrome.tf' ||
+            window.location?.origin === 'https://www.monochrome.tf';
         const localProxyUrl = canUseLocalProxy
             ? `/api/provider/deezer/stream?isrc=${encodeURIComponent(isrc)}&format=${encodeURIComponent(format)}`
             : null;
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 12000);
-            const res = await fetch(getProxyUrl(url), this.getDeezerRequestOptions({ signal: controller.signal }));
-            clearTimeout(timeoutId);
-            if (res.ok || res.status === 405 || res.status === 501) {
-                return { url, format, provider: 'deezer', rgInfo: null };
+        if (canUseDirectDeezer) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 12000);
+                const res = await fetch(getProxyUrl(url), this.getDeezerRequestOptions({ signal: controller.signal }));
+                clearTimeout(timeoutId);
+                if (res.ok || res.status === 405 || res.status === 501) {
+                    return { url, format, provider: 'deezer', rgInfo: null };
+                }
+            } catch (e) {
+                console.warn(`Deezer fallback failed for ISRC ${isrc}:`, e);
             }
-        } catch (e) {
-            console.warn(`Deezer fallback failed for ISRC ${isrc}:`, e);
         }
 
         if (!localProxyUrl) return null;
