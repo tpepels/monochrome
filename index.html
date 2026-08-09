@@ -181,7 +181,10 @@
                 <li data-action="track-info" data-type-filter="track,video">Track info</li>
                 <li data-action="open-original-url" data-type-filter="track,video">Open original URL</li>
                 <li data-action="download">Download</li>
-                <li class="separator"></li>
+                <li class="separator" data-type-filter="track,album,artist" data-action="horizantal-rule">
+                    <!-- IDK why adding a `data-action` is necessary, but without it
+                      the `data-type-filter` gets ignored; So I've added it -->
+                </li>
                 <li
                     data-action="block-track"
                     data-type-filter="track"
@@ -2245,7 +2248,7 @@
                     </section>
 
                     <section class="content-section">
-                        <h2 class="section-title">Favorites</h2>
+                        <h2 class="section-title">Liked Items & Local Files</h2>
                         <div class="search-tabs">
                             <button class="search-tab active" data-tab="tracks">Liked Tracks</button>
                             <button class="search-tab" data-tab="albums">Albums</button>
@@ -2351,7 +2354,15 @@
                                         id="local-browser-warning"
                                         style="display: none; color: #ef4444; margin-top: 10px; font-size: 0.9rem"
                                     >
-                                        Please use Google Chrome or Microsoft Edge to play local files.
+                                        Your browser doesn't support the File System Access API, which is required for
+                                        Local Files. We recommend
+                                        <a
+                                            href="https://helium.computer/"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style="color: inherit; text-decoration: underline"
+                                            >Helium</a
+                                        >.
                                     </p>
                                     <p style="margin-top: 10px; font-size: 0.9rem; color: var(--muted-foreground)">
                                         Select a folder on your device to play local files. <br />
@@ -3623,6 +3634,19 @@
                                     </div>
                                     <div class="setting-item">
                                         <div class="info">
+                                            <span class="label">Donation Reminders</span>
+                                            <span class="description"
+                                                >Occasionally show a notification inviting you to support
+                                                Monochrome</span
+                                            >
+                                        </div>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="donation-prompts-toggle" checked />
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                    <div class="setting-item">
+                                        <div class="info">
                                             <span class="label">Show Settings in Sidebar</span>
                                             <span class="description"
                                                 >Display the Settings link in the sidebar navigation</span
@@ -4189,11 +4213,38 @@
                                     </div>
                                     <select id="streaming-quality-setting">
                                         <option value="auto">Auto (Adaptive)</option>
+                                        <option value="DOLBY_ATMOS">Dolby Atmos</option>
                                         <option value="HI_RES_LOSSLESS">Hi-Res Lossless (24-bit)</option>
                                         <option value="LOSSLESS">Lossless (16-bit)</option>
                                         <option value="HIGH">AAC 320kbps</option>
                                         <option value="LOW">AAC 96kbps</option>
                                     </select>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Prefer Dolby Atmos</span>
+                                        <span class="description"
+                                            >Automatically request Dolby Atmos spatial audio on Tidal when
+                                            available</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="prefer-dolby-atmos-toggle" />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Native OS Dolby Atmos Rendering</span>
+                                        <span class="description"
+                                            >Render Atmos directly on Safari (Apple Spatial Audio) or Edge (Windows
+                                            Dolby Audio) for full volume</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="native-os-atmos-toggle" checked />
+                                        <span class="slider"></span>
+                                    </label>
                                 </div>
                                 <div class="setting-item">
                                     <div class="info">
@@ -4226,6 +4277,49 @@
                                         <input type="checkbox" id="gapless-playback-toggle" checked />
                                         <span class="slider"></span>
                                     </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Remove Silence</span>
+                                        <span class="description"
+                                            >Skip leading silence and move to the next track when trailing silence
+                                            begins</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="silence-removal-toggle" />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Crossfade</span>
+                                        <span class="description"
+                                            >Overlap tracks with an equal-power fade; when silence removal is enabled,
+                                            the fade starts before trailing silence</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="crossfade-toggle" />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Crossfade Duration</span>
+                                        <span class="description">Choose how long both tracks overlap</span>
+                                    </div>
+                                    <select id="crossfade-duration">
+                                        <option value="1">1 second</option>
+                                        <option value="2">2 seconds</option>
+                                        <option value="3">3 seconds</option>
+                                        <option value="4">4 seconds</option>
+                                        <option value="5">5 seconds</option>
+                                        <option value="6">6 seconds</option>
+                                        <option value="8">8 seconds</option>
+                                        <option value="10">10 seconds</option>
+                                        <option value="12">12 seconds</option>
+                                    </select>
                                 </div>
                             </div>
 
@@ -5400,6 +5494,7 @@
                                             <span class="description">Quality for track downloads</span>
                                         </div>
                                         <select id="download-quality-setting">
+                                            <option value="DOLBY_ATMOS">Dolby Atmos</option>
                                             <option value="HI_RES_LOSSLESS">Hi-Res Lossless (24-bit)</option>
                                             <option value="LOSSLESS">Lossless (16-bit)</option>
                                             <option value="HIGH">AAC 320kbps</option>
@@ -5754,26 +5849,26 @@
                             <div class="settings-group">
                                 <div class="setting-item">
                                     <div class="info">
-                                        <span class="label">Amazon Music</span>
+                                        <span class="label">Unified Playback</span>
                                         <span class="description"
-                                            >Use Amazon Music streams first, then fall back to Qobuz, then Deezer as a
-                                            last resort.</span
+                                            >Amazon is tried first, with the in-house lossless source handled by the
+                                            same API when Amazon is unavailable.</span
                                         >
                                     </div>
                                     <label class="toggle-switch">
-                                        <input type="checkbox" id="amazon-music-toggle" checked />
+                                        <input type="checkbox" id="unified-playback-toggle" checked />
                                         <span class="slider"></span>
                                     </label>
                                 </div>
                                 <div class="setting-item">
                                     <div class="info">
-                                        <span class="label">Amazon Music API URL</span>
-                                        <span class="description">The Amazon Music API endpoint</span>
+                                        <span class="label">Unified Playback API URL</span>
+                                        <span class="description">The API endpoint that resolves Amazon and Mono</span>
                                     </div>
                                     <input
                                         type="text"
-                                        id="amazon-music-api-base-url"
-                                        placeholder="https://amz.geeked.wtf"
+                                        id="unified-playback-api-base-url"
+                                        placeholder="https://music-api.geeked.wtf"
                                         style="
                                             width: 220px;
                                             padding: 0.35rem 0.5rem;
@@ -5787,37 +5882,15 @@
                                 </div>
                                 <div class="setting-item">
                                     <div class="info">
-                                        <span class="label">Turnstile Site Key</span>
+                                        <span class="label">App API Key</span>
                                         <span class="description"
-                                            >Required for Amazon Music requests protected by Turnstile</span
-                                        >
-                                    </div>
-                                    <input
-                                        type="text"
-                                        id="amazon-music-turnstile-site-key"
-                                        placeholder="0x..."
-                                        style="
-                                            width: 220px;
-                                            padding: 0.35rem 0.5rem;
-                                            border: 1px solid var(--border);
-                                            border-radius: var(--radius-md);
-                                            background: var(--card);
-                                            color: var(--foreground);
-                                            font-size: 0.8rem;
-                                        "
-                                    />
-                                </div>
-                                <div class="setting-item">
-                                    <div class="info">
-                                        <span class="label">Turnstile Bypass Token</span>
-                                        <span class="description"
-                                            >Optional server-side bypass token for trusted deployments</span
+                                            >Bearer key used with a browser Turnstile session for playback</span
                                         >
                                     </div>
                                     <input
                                         type="password"
-                                        id="amazon-music-turnstile-bypass-token"
-                                        placeholder="Optional"
+                                        id="unified-playback-api-token"
+                                        placeholder="amp_…"
                                         autocomplete="off"
                                         style="
                                             width: 220px;
@@ -5837,7 +5910,7 @@
                                     <div class="info">
                                         <span class="label">Deezer Fallback</span>
                                         <span class="description"
-                                            >Last-resort source, used only when both Amazon Music and Qobuz fail. Tops
+                                            >Last-resort source when the primary and other fallback providers fail. Tops
                                             out at 16-bit lossless (FLAC).</span
                                         >
                                     </div>
@@ -6234,7 +6307,7 @@
                         </p>
                         <div class="donate-goal-card">
                             <div class="donate-goal-card-header">
-                                <span class="donate-goal-card-label">July Donation Goal</span>
+                                <span class="donate-goal-card-label">Q3 Donation Goal</span>
                                 <span id="donate-goal-percent" class="donate-goal-card-percent">0%</span>
                             </div>
                             <div class="donate-goal-track">
@@ -6242,7 +6315,7 @@
                             </div>
                             <div class="donate-goal-card-footer">
                                 <span id="donate-goal">$0.00</span>
-                                <span>of $250.00 goal</span>
+                                <span>of $1,000.00 goal</span>
                             </div>
                         </div>
                         <div class="donate-actions" id="donate-actions">
@@ -6524,9 +6597,9 @@
                         </div>
                         <div class="donate-alt-section">
                             <p class="donate-alt-text">
-                                While donating isn't required and the service can still live on without hitting our goals,
-                                we're deeply grateful if you do! It helps the project have "just-in-case" money and
-                                helps us (the developers) out personally!
+                                While donating isn't required and the service can still live on without hitting our
+                                goals, we're deeply grateful if you do! It helps the project have "just-in-case" money
+                                and helps us (the developers) out personally!
                             </p>
                             <p class="donate-alt-text">
                                 If you cannot financially support us, please consider starring the project on GitHub and
@@ -6827,6 +6900,7 @@
                 </div>
             </footer>
         </div>
+        <script type="module" src="/js/discord-presence-bridge.js"></script>
         <script type="module" src="/js/app.js"></script>
     </body>
 </html>

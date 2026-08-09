@@ -15,7 +15,7 @@ import {
     pwaUpdateSettings,
     modalSettings,
     keyboardShortcuts,
-    amazonMusicSettings,
+    unifiedPlaybackSettings,
 } from './storage.js';
 import { UIRenderer } from './ui.js';
 import { Player } from './player.js';
@@ -23,7 +23,7 @@ import { MultiScrobbler } from './multi-scrobbler.js';
 import { LyricsManager, openLyricsPanel, clearLyricsPanelSync } from './lyrics.js';
 import { createRouter, updateTabTitle, navigate } from './router.js';
 import { initializePlayerEvents, initializeTrackInteractions, handleTrackAction } from './events.js';
-import { initializeUIInteractions } from './ui-interactions.js';
+import { initializeUIInteractions, updateLocalFilesSupportUI } from './ui-interactions.js';
 import { debounce, getShareUrl, sanitizeForFilename } from './utils.js';
 import { sidePanelManager } from './side-panel.js';
 import { db } from './db.js';
@@ -58,16 +58,7 @@ import {
 } from './icons.js';
 import { HiFiClient } from './HiFi.js';
 
-const AMAZON_DECRYPTER_SW_VERSION = '2026-06-23-flac-hls-v8';
-
-function canUseAmazonDefaultTurnstile() {
-    const siteKey = amazonMusicSettings.getTurnstileSiteKey().trim();
-    return (
-        siteKey !== amazonMusicSettings.DEFAULT_TURNSTILE_SITE_KEY ||
-        window.location?.origin === 'https://monochrome.tf' ||
-        window.location?.origin === 'https://www.monochrome.tf'
-    );
-}
+const AMAZON_DECRYPTER_SW_VERSION = '2026-08-06-crossfade-v10';
 
 function isOfficialMonochromeOrigin() {
     return window.location?.hostname === 'monochrome.tf' || window.location?.hostname === 'www.monochrome.tf';
@@ -584,12 +575,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await MusicAPI.initialize(apiSettings);
 
-    if (
-        amazonMusicSettings.isEnabled() &&
-        !amazonMusicSettings.getTurnstileBypassToken().trim() &&
-        canUseAmazonDefaultTurnstile()
-    ) {
-        MusicAPI.instance.tidalAPI.getTurnstileJwt().catch(() => null);
+    if (unifiedPlaybackSettings.isEnabled() && unifiedPlaybackSettings.getApiToken().trim()) {
+        MusicAPI.instance.tidalAPI.getUnifiedTurnstileJwt().catch(() => null);
     }
 
     const audioPlayer = document.getElementById('audio-player');
@@ -723,20 +710,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const lyricsManager = await LyricsManager.initialize(MusicAPI.instance);
     UIRenderer.instance.lyricsManager = lyricsManager;
 
-    // Check browser support for local files
-    const selectLocalBtn = document.getElementById('select-local-folder-btn');
-    const browserWarning = document.getElementById('local-browser-warning');
-
-    if (selectLocalBtn && browserWarning) {
-        const ua = navigator.userAgent;
-        const isChromeOrEdge = (ua.indexOf('Chrome') > -1 || ua.indexOf('Edg') > -1) && !/Mobile|Android/.test(ua);
-        const hasFileSystemApi = 'showDirectoryPicker' in window;
-
-        if (!isChromeOrEdge || !hasFileSystemApi) {
-            selectLocalBtn.style.display = 'none';
-            browserWarning.style.display = 'block';
-        }
-    }
+    updateLocalFilesSupportUI();
 
     // Kuroshiro is now loaded on-demand only when needed for Asian text with Romaji mode enabled
 
@@ -1115,7 +1089,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Auto-update lyrics when track changes
     let previousTrackId = null;
-    audioPlayer.addEventListener('play', async () => {
+    const handleActiveAudioPlay = async (event) => {
+        if (Player.instance.activeElement !== event.currentTarget) return;
         if (!Player.instance.currentTrack) return;
 
         // Update UI with current track info for theme
@@ -1161,7 +1136,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 Player.instance.activeElement
             );
         }
-    });
+    };
+    Player.instance.audioElements.forEach((element) => element.addEventListener('play', handleActiveAudioPlay));
 
     document.addEventListener('click', async (e) => {
         if (e.target.closest('#play-album-btn')) {

@@ -13,6 +13,9 @@ import {
     libreFmSettings,
     listenBrainzSettings,
     waveformSettings,
+    silenceRemovalSettings,
+    crossfadeSettings,
+    donationPromptSettings,
     keyboardShortcuts,
 } from './storage.js';
 import { showNotification, downloadTrackWithMetadata, downloadAlbum, downloadPlaylist } from './downloads.js';
@@ -30,6 +33,58 @@ import { LyricsManager } from './lyrics.js';
 import { Player } from './player.js';
 
 let currentTrackIdForWaveform = null;
+let copiedTracks = [];
+
+const DONATION_PROMPT_EVERY = 10;
+const DONATION_PLAY_COUNT_KEY = 'donation-prompt-play-count';
+
+function showDonationPrompt() {
+    if (!donationPromptSettings.isEnabled()) return;
+    let container = document.getElementById('support-notifications');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'support-notifications';
+        document.body.appendChild(container);
+    }
+    const el = document.createElement('div');
+    el.className = 'support-banner donation-prompt';
+    el.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 0.4rem;">Support Monochrome</div>
+        <p style="margin: 0 0 0.75rem; font-size: 0.85rem; line-height: 1.5; color: var(--muted-foreground);">
+            Enjoying the music? Monochrome is free, has no ads, and runs entirely on donations.
+        </p>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+            <button class="btn-secondary" data-action="dismiss" style="padding: 0.35rem 0.8rem; font-size: 0.8rem;">Maybe Later</button>
+            <button class="btn-primary" data-action="donate" style="padding: 0.35rem 0.8rem; font-size: 0.8rem;">Donate</button>
+        </div>
+    `;
+    const dismiss = () => {
+        el.style.animation = 'slide-out 0.3s ease forwards';
+        setTimeout(() => el.remove(), 300);
+    };
+    el.querySelector('[data-action="dismiss"]').onclick = dismiss;
+    el.querySelector('[data-action="donate"]').onclick = () => {
+        dismiss();
+        navigate('/donate');
+    };
+    container.appendChild(el);
+}
+
+function countPlayForDonationPrompt() {
+    if (!donationPromptSettings.isEnabled()) return;
+    let count = 0;
+    try {
+        count = parseInt(localStorage.getItem(DONATION_PLAY_COUNT_KEY), 10) || 0;
+    } catch {}
+    count++;
+    if (count >= DONATION_PROMPT_EVERY) {
+        count = 0;
+        showDonationPrompt();
+    }
+    try {
+        localStorage.setItem(DONATION_PLAY_COUNT_KEY, String(count));
+    } catch {}
+}
 
 const trackSelection = {
     selectedIds: new Set(),
@@ -175,6 +230,67 @@ function toggleTrackSelection(trackItem, ctrlHeld, shiftHeld) {
     trackSelection.isSelecting = trackSelection.selectedIds.size > 0;
     document.body.classList.toggle('multi-select-mode', trackSelection.isSelecting);
 }
+
+// logic for ctrl+a, ctrl+c and ctrl v for copy pasting tracks to different playlists or something
+document.addEventListener('keydown', async (e) => {
+    const el = document.activeElement;
+    if (['INPUT', 'TEXTAREA'].includes(el?.tagName) || el?.isContentEditable) return;
+
+    const key = e.key.toLowerCase();
+    if (!(e.ctrlKey || e.metaKey)) return;
+
+    if (key === 'a') {
+        const list = document.getElementById('playlist-detail-tracklist');
+        const items = list?.querySelectorAll('.track-item');
+        if (!items?.length) return;
+
+        e.preventDefault();
+        items.forEach((item) => {
+            const id = item.dataset.trackId;
+            if (id) {
+                trackSelection.selectedIds.add(id);
+                item.classList.add('selected');
+                updateCheckbox(item.querySelector('.track-checkbox'), true);
+            }
+        });
+        trackSelection.lastClickedId = null;
+    }
+
+    if (key === 'c') {
+        if (!trackSelection.selectedIds.size) return;
+
+        const list = document.getElementById('playlist-detail-tracklist');
+        if (!list) return;
+
+        const tracks = [...list.querySelectorAll('.track-item')]
+            .filter((item) => trackSelection.selectedIds.has(item.dataset.trackId))
+            .map((item) => trackDataStore.get(item))
+            .filter(Boolean);
+
+        if (!tracks.length) return;
+        copiedTracks = tracks.map((track) => ({ ...track }));
+        e.preventDefault();
+        console.log(`copied ${copiedTracks.length}`);
+    }
+
+    if (key === 'v') {
+        if (!copiedTracks.length) return;
+        const match = window.location.pathname.match(/^\/userplaylist\/([^/]+)$/);
+        if (!match) return;
+        e.preventDefault();
+        try {
+            const playlist = await db.addTracksToPlaylist(match[1], copiedTracks);
+            window.dispatchEvent(
+                new CustomEvent('playlist-refresh', {
+                    detail: { playlist },
+                })
+            );
+            alert('tracks pasted. refresh page to see changes');
+        } catch (error) {
+            console.error(error);
+        }
+    }
+});
 
 async function showMultiSelectPlaylistModal(tracks) {
     const modal = document.createElement('div');
@@ -427,6 +543,7 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
                     _previousTrackId = currentId;
                     listeningTracker.onTrackStart(player.currentTrack);
                     _trackPlayStartTime = Date.now();
+                    countPlayForDonationPrompt();
                 }
 
                 if (scrobbler.isAuthenticated()) {
@@ -459,6 +576,7 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
 
         element.addEventListener('ended', () => {
             if (player.activeElement !== element) return;
+            if (player._crossfadingTrack) return;
             const elapsedPlayTime = listeningTracker.getSessionSignals().accumulatedPlayTime || 0;
             const trackDur = listeningTracker.getSessionSignals().trackDuration || 0;
             listeningTracker.onTrackEnd();
@@ -473,6 +591,7 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
 
         element.addEventListener('timeupdate', async () => {
             if (player.activeElement !== element) return;
+            if (player.isLoadingTrack) return;
 
             const { currentTime, duration } = element;
             if (duration) {
@@ -480,6 +599,64 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
                 const currentTimeEl = document.getElementById('current-time');
                 progressFill.style.width = `${(currentTime / duration) * 100}%`;
                 currentTimeEl.textContent = formatTime(currentTime);
+
+                const removeSilence = silenceRemovalSettings.isEnabled();
+                const crossfadeEnabled = crossfadeSettings.isEnabled();
+                if (duration && (removeSilence || crossfadeEnabled)) {
+                    const {
+                        leadingSilenceSeconds = 0,
+                        trailingSilenceStartTime = duration,
+                        hasTrailingSilence = false,
+                    } = player.currentSilenceBoundaries || {};
+                    const crossfadeDurationSeconds = crossfadeSettings.getDuration();
+                    const crossfadeEndTime = removeSilence && hasTrailingSilence ? trailingSilenceStartTime : duration;
+                    const crossfadeStartTime = Math.max(0, crossfadeEndTime - crossfadeDurationSeconds);
+                    const crossfadeTriggerTime = Math.max(
+                        0,
+                        crossfadeStartTime - (removeSilence ? player.getNextCrossfadeLeadingSilenceSeconds() : 0)
+                    );
+
+                    if (
+                        removeSilence &&
+                        leadingSilenceSeconds > 0.5 &&
+                        currentTime < leadingSilenceSeconds &&
+                        !player._skippedLeadingSilence
+                    ) {
+                        player._skippedLeadingSilence = true;
+                        element.currentTime = leadingSilenceSeconds;
+                    }
+
+                    if (
+                        crossfadeEnabled &&
+                        currentTime >= crossfadeTriggerTime &&
+                        !player._crossfadingTrack &&
+                        !player._crossfadeUnavailable
+                    ) {
+                        player._crossfadingTrack = true;
+                        void player
+                            .crossfadeToNext(crossfadeDurationSeconds, {
+                                removeSilence,
+                                fadeStartTime: crossfadeStartTime,
+                            })
+                            .then((crossfaded) => {
+                                if (!crossfaded) {
+                                    player._crossfadingTrack = false;
+                                    player._crossfadeUnavailable = true;
+                                    if (element.ended) {
+                                        void player.playNext(0, { preserveGestureToken: true });
+                                    }
+                                }
+                            });
+                    } else if (
+                        removeSilence &&
+                        hasTrailingSilence &&
+                        currentTime >= trailingSilenceStartTime &&
+                        !player._crossfadingTrack
+                    ) {
+                        player._crossfadingTrack = true;
+                        void player.playNext(0, { preserveGestureToken: true });
+                    }
+                }
 
                 listeningTracker.onTimeUpdate(currentTime, duration);
 
@@ -497,8 +674,7 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
 
         element.addEventListener('loadedmetadata', () => {
             if (player.activeElement !== element) return;
-            const totalDurationEl = document.getElementById('total-duration');
-            totalDurationEl.textContent = formatTime(element.duration);
+            player.syncDurationUI(element);
             player.updateMediaSessionPositionState();
         });
 
@@ -557,7 +733,7 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
 
     window.addEventListener('volume-change', updateVolumeUI);
 
-    setupMediaListeners(audioPlayer);
+    (player.audioElements || [audioPlayer]).forEach(setupMediaListeners);
     if (player.video) {
         setupMediaListeners(player.video);
     }
@@ -621,7 +797,64 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
         });
     }
 
-    // Waveform Masking Logic
+    // Render SoundCloud's supplied PNG directly. It is a black waveform on a
+    // transparent background, so CSS only needs to invert it for the dark UI.
+    let waveformResizeObserver = null;
+
+    const clearWaveformGeometry = (progressBar, playerControls) => {
+        waveformResizeObserver?.disconnect();
+        waveformResizeObserver = null;
+        if (progressBar) {
+            progressBar.style.webkitMaskImage = '';
+            progressBar.style.maskImage = '';
+            progressBar.style.removeProperty('--waveform-mask-image');
+            progressBar.style.removeProperty('--waveform-mask-width');
+            progressBar.style.removeProperty('--waveform-geometry-width');
+            progressBar.querySelectorAll('.waveform-image, .waveform-geometry').forEach((element) => element.remove());
+            progressBar.classList.remove('has-waveform', 'waveform-loaded');
+        }
+        if (playerControls) playerControls.classList.remove('waveform-loaded');
+    };
+
+    const applyWaveformImage = (progressBar, pngUrl, targetTrackId) => {
+        if (!pngUrl || !player.currentTrack || player.currentTrack.id !== targetTrackId) return false;
+        const progressFill = progressBar.querySelector('.progress-fill');
+        if (!progressFill) return false;
+
+        progressBar.querySelectorAll('.waveform-image, .waveform-geometry').forEach((element) => element.remove());
+        const createImage = (className) => {
+            const image = document.createElement('img');
+            image.className = `waveform-image ${className}`;
+            image.src = pngUrl;
+            image.alt = '';
+            image.draggable = false;
+            image.setAttribute('aria-hidden', 'true');
+            return image;
+        };
+
+        const unplayedImage = createImage('waveform-unplayed');
+        const playedImage = createImage('waveform-played');
+        progressBar.insertBefore(unplayedImage, progressFill);
+        progressFill.appendChild(playedImage);
+
+        // The played image lives inside the percentage-width progress fill. Give
+        // both copies the seekbar's fixed pixel width so the fill only clips the
+        // image instead of continuously rescaling it as playback advances.
+        const syncWaveformWidth = () => {
+            const geometryWidth = Math.max(1, Math.round(progressBar.getBoundingClientRect().width));
+            progressBar.style.setProperty('--waveform-geometry-width', `${geometryWidth}px`);
+            unplayedImage.style.width = `${geometryWidth}px`;
+            playedImage.style.width = `${geometryWidth}px`;
+        };
+        syncWaveformWidth();
+        if (typeof ResizeObserver !== 'undefined') {
+            waveformResizeObserver?.disconnect();
+            waveformResizeObserver = new ResizeObserver(syncWaveformWidth);
+            waveformResizeObserver.observe(progressBar);
+        }
+        return true;
+    };
+
     const updateWaveform = async () => {
         const progressBar = document.getElementById('progress-bar');
         const playerControls = document.querySelector('.player-controls');
@@ -630,99 +863,77 @@ export async function initializePlayerEvents(player, audioPlayer, scrobbler, ui)
             player.currentTrack &&
             (player.currentTrack.isTracker ||
                 (player.currentTrack.id && String(player.currentTrack.id).startsWith('tracker-')));
+        const showWaveform = waveformSettings.isEnabled();
+        const needsWaveformTiming = silenceRemovalSettings.isEnabled() || crossfadeSettings.isEnabled();
 
-        if (!waveformSettings.isEnabled() || !player.currentTrack || isTracker) {
-            if (progressBar) {
-                progressBar.style.webkitMaskImage = '';
-                progressBar.style.maskImage = '';
-                progressBar.classList.remove('has-waveform', 'waveform-loaded');
-            }
-            if (playerControls) {
-                playerControls.classList.remove('waveform-loaded');
-            }
+        if ((!showWaveform && !needsWaveformTiming) || !player.currentTrack || isTracker) {
+            clearWaveformGeometry(progressBar, playerControls);
             currentTrackIdForWaveform = null;
             return;
         }
 
-        if (progressBar && currentTrackIdForWaveform !== player.currentTrack.id) {
-            currentTrackIdForWaveform = player.currentTrack.id;
-            progressBar.classList.add('has-waveform');
-            progressBar.classList.remove('waveform-loaded');
-            if (playerControls) {
-                playerControls.classList.remove('waveform-loaded');
+        if (progressBar) {
+            const targetTrackId = player.currentTrack.id;
+            if (currentTrackIdForWaveform !== targetTrackId) {
+                clearWaveformGeometry(progressBar, playerControls);
+                currentTrackIdForWaveform = targetTrackId;
+            }
+            if (showWaveform) {
+                progressBar.classList.add('has-waveform');
+            } else {
+                clearWaveformGeometry(progressBar, playerControls);
+                currentTrackIdForWaveform = targetTrackId;
             }
 
-            // Clear current mask while loading
-            progressBar.style.webkitMaskImage = '';
-            progressBar.style.maskImage = '';
-
             try {
-                const { url: streamUrl } = await player.api.getStreamUrl(player.currentTrack.id, 'LOW');
-                const waveformData = await waveformGenerator.getWaveform(streamUrl, player.currentTrack.id);
+                const waveformObj =
+                    player.currentStreamInfo?.waveform ||
+                    player.currentWaveform ||
+                    player.currentTrack?.waveform ||
+                    null;
+                const waveData = await waveformGenerator.loadWaveformData(waveformObj, targetTrackId);
+                let samples = waveData?.samples || null;
+                if (!samples?.length && waveData?.pngUrl) {
+                    samples = await waveformGenerator.loadWaveformPngSamples(waveData.pngUrl);
+                }
 
-                if (waveformData && currentTrackIdForWaveform === player.currentTrack.id) {
-                    let { peaks, duration } = waveformData;
-                    const trackDuration = player.currentTrack.duration;
-
-                    // Padding logic for sync
-                    if (trackDuration && duration && duration < trackDuration) {
-                        const diff = trackDuration - duration;
-                        if (diff > 0.5) {
-                            // If difference is significant (> 500ms)
-                            // Calculate how many peaks represent the missing time
-                            // peaks.length represents 'duration'
-                            // X peaks represent 'diff'
-                            const peaksPerSecond = peaks.length / duration;
-                            const paddingPeaksCount = Math.floor(diff * peaksPerSecond);
-
-                            if (paddingPeaksCount > 0) {
-                                const newPeaks = new Float32Array(peaks.length + paddingPeaksCount);
-                                // Fill start with 0s (implied by new Float32Array)
-                                newPeaks.set(peaks, paddingPeaksCount);
-                                peaks = newPeaks;
-                            }
-                        }
+                if (player.currentTrack && player.currentTrack.id === targetTrackId) {
+                    if (samples?.length) {
+                        player.currentSilenceBoundaries = waveformGenerator.getSilenceBoundaries(
+                            samples,
+                            waveData?.durationSeconds ||
+                                player.currentTrack.duration ||
+                                player.activeElement?.duration ||
+                                0,
+                            5,
+                            crossfadeSettings.getDuration()
+                        );
                     }
 
-                    // Create a temporary canvas to generate the mask
-                    const canvas = document.createElement('canvas');
-                    const rect = progressBar.getBoundingClientRect();
-                    canvas.width = rect.width || 500;
-                    canvas.height = 28; // Fixed height for mask generation
+                    const geometryApplied = showWaveform
+                        ? applyWaveformImage(progressBar, waveData?.pngUrl, targetTrackId)
+                        : false;
 
-                    waveformGenerator.drawWaveform(canvas, peaks);
-
-                    const dataUrl = canvas.toDataURL();
-                    progressBar.style.webkitMaskImage = `url(${dataUrl})`;
-                    progressBar.style.webkitMaskSize = '100% 100%';
-                    progressBar.style.webkitMaskRepeat = 'no-repeat';
-                    progressBar.style.maskImage = `url(${dataUrl})`;
-                    progressBar.style.maskSize = '100% 100%';
-                    progressBar.style.maskRepeat = 'no-repeat';
-
-                    progressBar.classList.add('waveform-loaded');
-                    if (playerControls) {
-                        playerControls.classList.add('waveform-loaded');
+                    if (geometryApplied) {
+                        progressBar.classList.add('waveform-loaded');
+                        if (playerControls) playerControls.classList.add('waveform-loaded');
                     }
                 }
             } catch (e) {
-                console.error('Failed to load waveform mask:', e);
+                console.error('Failed to load waveform:', e);
             }
         }
     };
+
+    window.addEventListener('waveform-update', async () => {
+        await updateWaveform();
+    });
 
     window.addEventListener('waveform-toggle', async (e) => {
         if (!e.detail.enabled) {
             const progressBar = document.getElementById('progress-bar');
             const playerControls = document.querySelector('.player-controls');
-            if (progressBar) {
-                progressBar.style.webkitMaskImage = '';
-                progressBar.style.maskImage = '';
-                progressBar.classList.remove('has-waveform', 'waveform-loaded');
-            }
-            if (playerControls) {
-                playerControls.classList.remove('waveform-loaded');
-            }
+            clearWaveformGeometry(progressBar, playerControls);
         }
         await updateWaveform();
     });
@@ -759,6 +970,7 @@ function initializeSmoothSliders(player) {
     let wasPlaying = false;
     let isAdjustingVolume = false;
     let lastSeekPosition = 0;
+    let suppressNextSeekClick = false;
 
     const seek = (bar, event, setter) => {
         const rect = bar.getBoundingClientRect();
@@ -863,11 +1075,10 @@ function initializeSmoothSliders(player) {
             const activeEl = player.activeElement;
             // Commit the seek
             if (!isNaN(activeEl.duration)) {
-                activeEl.currentTime = lastSeekPosition * activeEl.duration;
-                player.updateMediaSessionPositionState();
-                if (wasPlaying) activeEl.play();
+                void player.seekTo(lastSeekPosition * activeEl.duration, { resume: wasPlaying });
             }
             isSeeking = false;
+            suppressNextSeekClick = true;
         }
 
         if (isAdjustingVolume) {
@@ -879,11 +1090,10 @@ function initializeSmoothSliders(player) {
         if (isSeeking) {
             const activeEl = player.activeElement;
             if (!isNaN(activeEl.duration)) {
-                activeEl.currentTime = lastSeekPosition * activeEl.duration;
-                player.updateMediaSessionPositionState();
-                if (wasPlaying) activeEl.play();
+                void player.seekTo(lastSeekPosition * activeEl.duration, { resume: wasPlaying });
             }
             isSeeking = false;
+            suppressNextSeekClick = true;
         }
 
         if (isAdjustingVolume) {
@@ -892,13 +1102,16 @@ function initializeSmoothSliders(player) {
     });
 
     progressBar.addEventListener('click', (e) => {
+        if (suppressNextSeekClick) {
+            suppressNextSeekClick = false;
+            return;
+        }
         if (!isSeeking) {
             const activeEl = player.activeElement;
             // Only handle click if not result of a drag release
             seek(progressBar, e, (position) => {
                 if (!isNaN(activeEl.duration) && activeEl.duration > 0 && activeEl.duration !== Infinity) {
-                    activeEl.currentTime = position * activeEl.duration;
-                    player.updateMediaSessionPositionState();
+                    void player.seekTo(position * activeEl.duration);
                 } else if (player.currentTrack && player.currentTrack.duration) {
                     const targetTime = position * player.currentTrack.duration;
                     const progressFill = document.querySelector('.progress-fill');

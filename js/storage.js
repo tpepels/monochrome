@@ -1,12 +1,11 @@
 //storage.js
 
-function svgRightArrow(size = 20) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`;
-}
+import { SVG_RIGHT_ARROW } from './icons';
+import { isIos, isSafari } from './platform-detection.js';
 
 export const apiSettings = {
     STORAGE_KEY: 'monochrome-api-instances-v9',
-    INSTANCES_URLS: ['https://tidal-uptime.geeked.wtf'],
+    INSTANCES_URLS: [],
     defaultInstances: { api: [], streaming: [], qobuz: [] },
     userInstances: null,
     instancesLoaded: false,
@@ -146,6 +145,9 @@ export const apiSettings = {
             // Ensure default Qobuz instance is always available
             if (groupedInstances.qobuz.length === 0) {
                 groupedInstances.qobuz = [{ url: 'https://qobuz.kennyy.com.br', version: '1.0' }];
+            }
+            if (groupedInstances.api.length === 0) {
+                groupedInstances.api = [{ url: 'https://lol.samidy.workers.dev', version: '2.10' }];
             }
 
             this.defaultInstances = groupedInstances;
@@ -786,10 +788,13 @@ export const preferDolbyAtmosSettings = {
     STORAGE_KEY: 'prefer-dolby-atmos',
     isEnabled() {
         try {
-            const stored = localStorage.getItem(this.STORAGE_KEY) || 'false';
+            const stored = localStorage.getItem(this.STORAGE_KEY);
+            if (stored === null) {
+                return isSafari || isIos;
+            }
             return stored === 'true';
         } catch {
-            return false;
+            return isSafari || isIos;
         }
     },
     setEnabled(enabled) {
@@ -812,6 +817,24 @@ export const losslessContainerSettings = {
     },
 };
 
+export const nativeOsAtmosSettings = {
+    STORAGE_KEY: 'native-os-atmos-rendering',
+    isEnabled() {
+        try {
+            const stored = localStorage.getItem(this.STORAGE_KEY);
+            if (stored === null) {
+                return isSafari || isIos;
+            }
+            return stored === 'true';
+        } catch {
+            return isSafari || isIos;
+        }
+    },
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
 export const coverArtSizeSettings = {
     STORAGE_KEY: 'cover-art-size',
     getSize() {
@@ -831,9 +854,93 @@ export const waveformSettings = {
 
     isEnabled() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) === 'true';
+            if (localStorage.getItem('waveform-seekbar-migrated-v2') !== 'true') {
+                localStorage.setItem('waveform-seekbar-migrated-v2', 'true');
+                const defaultEnabled = window.innerWidth > 768;
+                localStorage.setItem(this.STORAGE_KEY, defaultEnabled ? 'true' : 'false');
+                return true;
+            }
+            const val = localStorage.getItem(this.STORAGE_KEY);
+            return val === null ? window.innerWidth > 768 : val === 'true';
+        } catch {
+            return true;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+const getLegacySilenceCrossfadeSetting = () => {
+    try {
+        const value = localStorage.getItem('smart-silence-skip-enabled');
+        return value === null ? null : value === 'true';
+    } catch {
+        return null;
+    }
+};
+
+export const silenceRemovalSettings = {
+    STORAGE_KEY: 'silence-removal-enabled',
+
+    isEnabled() {
+        try {
+            const val = localStorage.getItem(this.STORAGE_KEY);
+            if (val !== null) return val === 'true';
+            return getLegacySilenceCrossfadeSetting() ?? true;
         } catch {
             return false;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const crossfadeSettings = {
+    STORAGE_KEY: 'crossfade-enabled',
+    DURATION_KEY: 'crossfade-duration-seconds',
+
+    isEnabled() {
+        try {
+            const val = localStorage.getItem(this.STORAGE_KEY);
+            if (val !== null) return val === 'true';
+            return getLegacySilenceCrossfadeSetting() ?? false;
+        } catch {
+            return false;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+
+    getDuration() {
+        try {
+            const duration = Number(localStorage.getItem(this.DURATION_KEY));
+            return Number.isFinite(duration) && duration >= 1 && duration <= 12 ? duration : 5;
+        } catch {
+            return 5;
+        }
+    },
+
+    setDuration(duration) {
+        const safeDuration = Math.max(1, Math.min(12, Number(duration) || 5));
+        localStorage.setItem(this.DURATION_KEY, String(safeDuration));
+    },
+};
+
+export const donationPromptSettings = {
+    STORAGE_KEY: 'donation-prompts-enabled',
+
+    isEnabled() {
+        try {
+            const value = localStorage.getItem(this.STORAGE_KEY);
+            return value === null ? true : value === 'true';
+        } catch {
+            return true;
         }
     },
 
@@ -2166,7 +2273,7 @@ export const sidebarSettings = {
             document.body.classList.add('sidebar-collapsed');
             const toggleBtn = document.getElementById('sidebar-toggle');
             if (toggleBtn) {
-                toggleBtn.innerHTML = svgRightArrow(20);
+                toggleBtn.innerHTML = SVG_RIGHT_ARROW(20);
             }
         }
     },
@@ -3099,17 +3206,18 @@ export const musicProviderSettings = {
     },
 };
 
-export const amazonMusicSettings = {
-    ENABLED_KEY: 'amazon-music-enabled',
-    API_BASE_URL_KEY: 'amazon-music-api-base-url',
-    TURNSTILE_SITE_KEY: 'amazon-music-turnstile-site-key',
-    TURNSTILE_BYPASS_TOKEN: 'amazon-music-turnstile-bypass-token',
-    DEFAULT_API_BASE_URL: 'https://amz.geeked.wtf',
-    DEFAULT_TURNSTILE_SITE_KEY: '0x4AAAAAADgxqF6QVMm0GLHH',
+export const unifiedPlaybackSettings = {
+    ENABLED_KEY: 'unified-playback-enabled',
+    API_BASE_URL_KEY: 'unified-playback-api-base-url',
+    API_TOKEN_KEY: 'unified-playback-api-token',
+    DEFAULT_API_BASE_URL: 'https://music-api.geeked.wtf',
+    LEGACY_API_BASE_URLS: ['https://amz.geeked.wtf', 'https://track-api.monochrome.tf', 'https://mono.geeked.wtf'],
+    DEFAULT_API_TOKEN: 'amp_29b2lIr4mze4tK-P8QDOxfMZ9anCgJ9_uGTUks3nIyo',
 
     isEnabled() {
         try {
-            return localStorage.getItem(this.ENABLED_KEY) !== 'false';
+            const value = localStorage.getItem(this.ENABLED_KEY) ?? localStorage.getItem('amazon-music-enabled');
+            return value !== 'false';
         } catch {
             return true;
         }
@@ -3121,7 +3229,12 @@ export const amazonMusicSettings = {
 
     getApiBaseUrl() {
         try {
-            return localStorage.getItem(this.API_BASE_URL_KEY) || this.DEFAULT_API_BASE_URL;
+            const storedUrl =
+                localStorage.getItem(this.API_BASE_URL_KEY) || localStorage.getItem('amazon-music-api-base-url');
+            if (storedUrl && !this.LEGACY_API_BASE_URLS.includes(storedUrl.replace(/\/+$/, ''))) {
+                return storedUrl;
+            }
+            return import.meta.env.VITE_UNIFIED_PLAYBACK_API_BASE_URL || this.DEFAULT_API_BASE_URL;
         } catch {
             return this.DEFAULT_API_BASE_URL;
         }
@@ -3131,36 +3244,33 @@ export const amazonMusicSettings = {
         localStorage.setItem(this.API_BASE_URL_KEY, url || this.DEFAULT_API_BASE_URL);
     },
 
-    getTurnstileSiteKey() {
+    getApiToken() {
         try {
             return (
-                localStorage.getItem(this.TURNSTILE_SITE_KEY) ||
-                import.meta.env.VITE_AMAZON_TURNSTILE_SITE_KEY ||
-                this.DEFAULT_TURNSTILE_SITE_KEY
-            );
-        } catch {
-            return this.DEFAULT_TURNSTILE_SITE_KEY;
-        }
-    },
-
-    setTurnstileSiteKey(siteKey) {
-        localStorage.setItem(this.TURNSTILE_SITE_KEY, siteKey || '');
-    },
-
-    getTurnstileBypassToken() {
-        try {
-            return (
-                localStorage.getItem(this.TURNSTILE_BYPASS_TOKEN) ||
+                localStorage.getItem(this.API_TOKEN_KEY) ||
+                localStorage.getItem('amazon-music-turnstile-bypass-token') ||
+                import.meta.env.VITE_UNIFIED_PLAYBACK_API_TOKEN ||
                 import.meta.env.VITE_AMAZON_TURNSTILE_BYPASS_TOKEN ||
-                ''
+                this.DEFAULT_API_TOKEN
             );
         } catch {
-            return '';
+            return this.DEFAULT_API_TOKEN;
         }
     },
 
-    setTurnstileBypassToken(token) {
-        localStorage.setItem(this.TURNSTILE_BYPASS_TOKEN, token || '');
+    setApiToken(token) {
+        localStorage.setItem(this.API_TOKEN_KEY, token || '');
+    },
+
+    isDefaultApiToken(token) {
+        const currentToken = (token || this.getApiToken() || '').trim();
+        const defaultToken = (this.DEFAULT_API_TOKEN || '').trim();
+        const envToken = (
+            import.meta.env.VITE_UNIFIED_PLAYBACK_API_TOKEN ||
+            import.meta.env.VITE_AMAZON_TURNSTILE_BYPASS_TOKEN ||
+            ''
+        ).trim();
+        return currentToken === defaultToken || (Boolean(envToken) && currentToken === envToken);
     },
 };
 
