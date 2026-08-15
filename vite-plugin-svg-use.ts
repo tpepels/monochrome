@@ -121,7 +121,9 @@ export default function viteSvgUsePlugin(): Plugin {
                 if (typeof find === 'string' ? src.startsWith(find) : find.test(src)) {
                     // Remove alias prefix and resolve
                     const aliasedPath = src.replace(find, replacement);
-                    return normalizePath(path.resolve(root, aliasedPath.replace(/^\//, '')));
+                    return normalizePath(
+                        path.isAbsolute(aliasedPath) ? aliasedPath : path.resolve(root, aliasedPath.replace(/^\//, ''))
+                    );
                 }
             }
         }

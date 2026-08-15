@@ -51,12 +51,12 @@ export default defineConfig(({ mode }) => {
         },
         resolve: {
             alias: {
-                '!lucide': '/node_modules/lucide-static/icons',
-                '!simpleicons': '/node_modules/simple-icons/icons',
-                '!': '/node_modules',
+                '!lucide': path.resolve(__dirname, 'node_modules/lucide-static/icons'),
+                '!simpleicons': path.resolve(__dirname, 'node_modules/simple-icons/icons'),
+                '!': path.resolve(__dirname, 'node_modules'),
 
                 events: path.resolve(__dirname, 'node_modules/events/events.js'),
-                pocketbase: '/node_modules/pocketbase/dist/pocketbase.es.js',
+                pocketbase: path.resolve(__dirname, 'node_modules/pocketbase/dist/pocketbase.es.js'),
                 stream: path.resolve(__dirname, 'stream-stub.js'), // Stub for stream module
             },
         },
