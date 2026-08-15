@@ -41,6 +41,7 @@ import { Visualizer } from './visualizer.js';
 import { audioContextManager } from './audio-context.js';
 import { navigate } from './router.js';
 import { sidePanelManager } from './side-panel.js';
+import { searchCommunityPlaylists } from './community-playlists.js';
 import {
     renderUnreleasedPage as renderUnreleasedTrackerPage,
     renderTrackerArtistPage as renderTrackerArtistContent,
@@ -4461,6 +4462,12 @@ export class UIRenderer {
                 artists: finalArtists,
                 albums: finalAlbums,
                 playlists: finalPlaylists,
+                communityPlaylists: await searchCommunityPlaylists(query, signal).catch((err) => {
+                    if (err.name === 'AbortError') {
+                        throw err;
+                    }
+                    return [];
+                }),
                 artistsEnriched: false,
                 rendered: {},
             };
@@ -4507,6 +4514,9 @@ export class UIRenderer {
                 break;
             case 'playlists':
                 await this._renderSearchPlaylists(state);
+                break;
+            case 'community-playlists':
+                await this._renderSearchCommunityPlaylists(state);
                 break;
             case 'podcasts':
                 await this.renderPodcastSearchResults(state.query);
@@ -4566,6 +4576,24 @@ export class UIRenderer {
             : createPlaceholder('No playlists found.');
         for (const playlist of state.playlists) {
             const el = playlistsContainer.querySelector(`[data-playlist-id="${playlist.uuid}"]`);
+            if (el) {
+                trackDataStore.set(el, playlist);
+                await this.updateLikeState(el, 'playlist', playlist.uuid);
+            }
+        }
+    }
+
+    async _renderSearchCommunityPlaylists(state) {
+        const container = document.getElementById('search-community-playlists-container');
+
+        if (!state.communityPlaylists) {
+            state.communityPlaylists = await searchCommunityPlaylists(state.query);
+        }
+        container.innerHTML = state.communityPlaylists.length
+            ? state.communityPlaylists.map((playlist) => this.createPlaylistCardHTML(playlist)).join('')
+            : createPlaceholder('No community playlists found.');
+        for (const playlist of state.communityPlaylists) {
+            const el = container.querySelector(`[data-playlist-id="${playlist.uuid}"]`);
             if (el) {
                 trackDataStore.set(el, playlist);
                 await this.updateLikeState(el, 'playlist', playlist.uuid);
@@ -4665,7 +4693,6 @@ export class UIRenderer {
 
         imageEl.src = '';
         imageEl.style.backgroundColor = 'var(--muted)';
-        titleEl.innerHTML = '<div class="skeleton" style="height: 48px; width: 300px; max-width: 90%;"></div>';
         metaEl.innerHTML = '<div class="skeleton" style="height: 16px; width: 200px; max-width: 80%;"></div>';
         prodEl.innerHTML = '<div class="skeleton" style="height: 16px; width: 200px; max-width: 80%;"></div>';
         rateCriticsEl.innerHTML = '<div class="skeleton" style="height: 16px; width: 200px; max-width: 80%;"></div>';
@@ -6934,20 +6961,14 @@ export class UIRenderer {
 
     renderApiSettings() {
         const container = document.getElementById('api-instance-list');
-        Promise.allSettled([
-            this.api.settings.getInstances('api'),
-            this.api.settings.getInstances('streaming'),
-            this.api.settings.getInstances('qobuz'),
-        ])
+        Promise.allSettled([this.api.settings.getInstances('api'), this.api.settings.getInstances('streaming')])
             .then((results) => {
                 const apiInstances = results[0].status === 'fulfilled' ? results[0].value : [];
                 const streamingInstances = results[1].status === 'fulfilled' ? results[1].value : [];
-                const qobuzInstances = results[2].status === 'fulfilled' ? results[2].value : [];
                 const renderGroup = (instances, type) => {
                     const groupLabels = {
                         api: 'API Instances',
                         streaming: 'Streaming Instances',
-                        qobuz: 'Qobuz Instances',
                     };
 
                     const listHtml = (instances || [])
@@ -7000,8 +7021,7 @@ export class UIRenderer {
                     renderGroup(apiInstances, 'api') +
                     (streamingInstances && streamingInstances.length > 0
                         ? renderGroup(streamingInstances, 'streaming')
-                        : '') +
-                    renderGroup(qobuzInstances, 'qobuz');
+                        : '');
 
                 const stats = this.api.getCacheStats();
                 const cacheInfo = document.getElementById('cache-info');

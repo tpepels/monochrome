@@ -6,7 +6,7 @@ import { isIos, isSafari } from './platform-detection.js';
 export const apiSettings = {
     STORAGE_KEY: 'monochrome-api-instances-v9',
     INSTANCES_URLS: [],
-    defaultInstances: { api: [], streaming: [], qobuz: [] },
+    defaultInstances: { api: [], streaming: [] },
     userInstances: null,
     instancesLoaded: false,
     _loadPromise: null,
@@ -14,26 +14,10 @@ export const apiSettings = {
     _staticDefaultInstances() {
         return {
             api: [
-                { url: 'https://hifi.geeked.wtf', version: '2.7' },
-                { url: 'https://eu-central.monochrome.tf', version: '2.7' },
-                { url: 'https://us-west.monochrome.tf', version: '2.7' },
-                { url: 'https://api.monochrome.tf', version: '2.5' },
+                { url: 'https://lol.samidy.workers.dev', version: '2.10' },
                 { url: 'https://monochrome-api.samidy.com', version: '2.3' },
-                { url: 'https://maus.qqdl.site', version: '2.6' },
-                { url: 'https://vogel.qqdl.site', version: '2.6' },
-                { url: 'https://katze.qqdl.site', version: '2.6' },
-                { url: 'https://hund.qqdl.site', version: '2.6' },
-                { url: 'https://tidal.kinoplus.online', version: '2.2' },
-                { url: 'https://wolf.qqdl.site', version: '2.2' },
             ],
-            streaming: [
-                { url: 'https://hifi.geeked.wtf', version: '2.7' },
-                { url: 'https://maus.qqdl.site', version: '2.6' },
-                { url: 'https://vogel.qqdl.site', version: '2.6' },
-                { url: 'https://katze.qqdl.site', version: '2.6' },
-                { url: 'https://hund.qqdl.site', version: '2.6' },
-                { url: 'https://wolf.qqdl.site', version: '2.6' },
-            ],
+            streaming: [{ url: 'https://lol.samidy.workers.dev', version: '2.10' }],
             qobuz: [{ url: 'https://qobuz.kennyy.com.br', version: '1.0' }],
         };
     },
@@ -48,11 +32,13 @@ export const apiSettings = {
         if (this.userInstances) return this.userInstances;
         try {
             const stored = localStorage.getItem('monochrome-user-api-instances-v1');
-            const parsed = stored ? JSON.parse(stored) : { api: [], streaming: [], qobuz: [] };
-            if (!parsed.qobuz) parsed.qobuz = [];
-            this.userInstances = parsed;
+            const parsed = stored ? JSON.parse(stored) : {};
+            this.userInstances = {
+                api: Array.isArray(parsed.api) ? parsed.api : [],
+                streaming: Array.isArray(parsed.streaming) ? parsed.streaming : [],
+            };
         } catch {
-            this.userInstances = { api: [], streaming: [], qobuz: [] };
+            this.userInstances = { api: [], streaming: [] };
         }
         return this.userInstances;
     },
@@ -85,7 +71,10 @@ export const apiSettings = {
                     const now = Date.now();
                     // Check if cached data is less than 15 minutes old
                     if (parsed.timestamp && now - parsed.timestamp < 15 * 60 * 1000) {
-                        this.defaultInstances = parsed.data;
+                        this.defaultInstances = {
+                            api: Array.isArray(parsed.data?.api) ? parsed.data.api : [],
+                            streaming: Array.isArray(parsed.data?.streaming) ? parsed.data.streaming : [],
+                        };
                         this.instancesLoaded = true;
                         this._loadPromise = null;
                         return this.defaultInstances;
@@ -121,7 +110,7 @@ export const apiSettings = {
                 return this.defaultInstances;
             }
 
-            let groupedInstances = { api: [], streaming: [], qobuz: [] };
+            let groupedInstances = { api: [], streaming: [] };
 
             const isBlockedInstance = (item) => {
                 const url = typeof item === 'string' ? item : item.url;
@@ -138,14 +127,6 @@ export const apiSettings = {
                 groupedInstances.streaming = [...groupedInstances.api];
             }
 
-            if (data.qobuz && Array.isArray(data.qobuz)) {
-                groupedInstances.qobuz = data.qobuz;
-            }
-
-            // Ensure default Qobuz instance is always available
-            if (groupedInstances.qobuz.length === 0) {
-                groupedInstances.qobuz = [{ url: 'https://qobuz.kennyy.com.br', version: '1.0' }];
-            }
             if (groupedInstances.api.length === 0) {
                 groupedInstances.api = [{ url: 'https://lol.samidy.workers.dev', version: '2.10' }];
             }
@@ -239,7 +220,7 @@ export const apiSettings = {
             const bottom = [];
             for (const item of array) {
                 const url = getUrl(item);
-                if (url.includes('hifi.geeked.wtf')) top.push(item);
+                if (url.includes('lol.samidy.workers.dev')) top.push(item);
                 else if (url.includes('.qqdl.site')) bottom.push(item);
                 else middle.push(item);
             }
@@ -252,10 +233,6 @@ export const apiSettings = {
 
         if (instances.streaming && instances.streaming.length) {
             instances.streaming = prioritySort([...instances.streaming]);
-        }
-
-        if (instances.qobuz && instances.qobuz.length) {
-            instances.qobuz = shuffle([...instances.qobuz]);
         }
 
         this.saveInstances(instances);
@@ -767,11 +744,11 @@ export const downloadQualitySettings = {
                 return 'FFMPEG_MP3_320';
             }
 
-            // Migrate legacy atmos value
+            // The unified API no longer uses the generic Atmos request. Preserve
+            // the user's intent by migrating it to the shared Amazon/Tidal tier.
             if (stored === 'DOLBY_ATMOS') {
-                this.setQuality('HI_RES_LOSSLESS');
-                preferDolbyAtmosSettings.setEnabled(true);
-                return 'HI_RES_LOSSLESS';
+                this.setQuality('DOLBY_ATMOS_EAC3_HIGH');
+                return 'DOLBY_ATMOS_EAC3_HIGH';
             }
 
             return stored;

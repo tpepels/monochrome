@@ -9,6 +9,7 @@ import { onRequest as cancelDownloadRequest } from '../functions/api/downloads/[
 import { onRequest as retryDownloadRequest } from '../functions/api/downloads/[jobId]/retry.js';
 import { onRequest as sweepDownloadsRequest } from '../functions/api/downloads/maintenance/sweep.js';
 import { jsonResponse } from './downloads/http.js';
+import { proxyHiFiRequest } from './hifi-proxy.js';
 import { proxyDeezerStream } from './provider-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -105,7 +106,11 @@ async function handleApi(request) {
     };
 
     if (url.pathname === '/api/health') {
-        return jsonResponse({ success: true, service: 'monochrome', downloadsApi: true });
+        return jsonResponse({ success: true, service: 'monochrome', downloadsApi: true, hifiProxy: true });
+    }
+
+    if (url.pathname === '/api/hifi-proxy') {
+        return proxyHiFiRequest(request, { env: context.env });
     }
 
     if (url.pathname === '/api/downloads') {

@@ -1,4 +1,5 @@
 //js/app.js
+import './sentry.js';
 import discordSvg from '../images/discord.svg?svg&size=22';
 import googleSvg from '../images/google.svg?svg&size=22';
 import githubSvg from '../images/github.svg?svg&size=22';
@@ -24,7 +25,7 @@ import { LyricsManager, openLyricsPanel, clearLyricsPanelSync } from './lyrics.j
 import { createRouter, updateTabTitle, navigate } from './router.js';
 import { initializePlayerEvents, initializeTrackInteractions, handleTrackAction } from './events.js';
 import { initializeUIInteractions, updateLocalFilesSupportUI } from './ui-interactions.js';
-import { debounce, getShareUrl, sanitizeForFilename } from './utils.js';
+import { debounce, getShareUrl, normalizeQualityToken, sanitizeForFilename } from './utils.js';
 import { sidePanelManager } from './side-panel.js';
 import { db } from './db.js';
 import { showNotification } from './downloads.js';
@@ -58,7 +59,7 @@ import {
 } from './icons.js';
 import { HiFiClient } from './HiFi.js';
 
-const AMAZON_DECRYPTER_SW_VERSION = '2026-08-06-crossfade-v10';
+const AMAZON_DECRYPTER_SW_VERSION = '2026-08-09-atmos-v11';
 
 function isOfficialMonochromeOrigin() {
     return window.location?.hostname === 'monochrome.tf' || window.location?.hostname === 'www.monochrome.tf';
@@ -575,14 +576,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await MusicAPI.initialize(apiSettings);
 
-    if (unifiedPlaybackSettings.isEnabled() && unifiedPlaybackSettings.getApiToken().trim()) {
+    if (
+        unifiedPlaybackSettings.isEnabled() &&
+        unifiedPlaybackSettings.getApiToken().trim() &&
+        MusicAPI.instance.tidalAPI.canUseUnifiedTurnstile()
+    ) {
         MusicAPI.instance.tidalAPI.getUnifiedTurnstileJwt().catch(() => null);
     }
 
     const audioPlayer = document.getElementById('audio-player');
 
     // i love ios and macos!!!! webkit fucking SUCKS BULLSHIT sorry ios/macos heads yall getting lossless only playback
-    const currentQuality = localStorage.getItem('playback-quality') || 'HI_RES_LOSSLESS';
+    const storedQuality = localStorage.getItem('playback-quality') || 'HI_RES_LOSSLESS';
+    const currentQuality = normalizeQualityToken(storedQuality) || storedQuality;
+    if (currentQuality !== storedQuality) localStorage.setItem('playback-quality', currentQuality);
     await Player.initialize(audioPlayer, MusicAPI.instance, currentQuality);
 
     // Initialize tracker

@@ -1,5 +1,5 @@
 // js/accounts/config.js
-import { createAuthClient } from 'https://esm.sh/better-auth/client';
+import { createAuthClient } from 'better-auth/client';
 
 const OFFICIAL_AUTH_HOSTS = new Set(['monochrome.tf', 'www.monochrome.tf']);
 

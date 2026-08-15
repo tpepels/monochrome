@@ -2146,108 +2146,23 @@ class HiFiClient {
     ): Promise<TidalResponse<SearchResponse>> {
         const { q, s, a, al, v, p, i, offset = 0, limit = 25 } = options;
 
-        const parseOpenApiSearch = (jsonApi: any): SearchResponse['data'] => {
-            if (!jsonApi || !jsonApi.data) return {};
-
-            const includedMap = new Map<string, any>();
-            if (Array.isArray(jsonApi.included)) {
-                for (const item of jsonApi.included) {
-                    includedMap.set(`${item.type}:${item.id}`, item);
-                }
-            }
-
-            const resolveArtworkId = (item: any, relName: string) => {
-                const ref = item?.relationships?.[relName]?.data?.[0];
-                if (!ref) return null;
-                const artwork = includedMap.get(`artworks:${ref.id}`);
-                const href = artwork?.attributes?.files?.[0]?.href;
-                return href ? HiFiClient.#extractUuidFromTidalUrl(href) : null;
-            };
-
-            const resolveArtists = (item: any) => {
-                const refs = item?.relationships?.artists?.data;
-                if (!Array.isArray(refs)) return [];
-                return refs.map((art: any) => {
-                    const aItem = includedMap.get(`artists:${art.id}`);
-                    return {
-                        id: Number(art.id),
-                        name: aItem?.attributes?.name ?? '',
-                    };
-                });
-            };
-
-            const resolveItem = (ref: { id: string; type: string }) => {
-                const item = includedMap.get(`${ref.type}:${ref.id}`);
-                if (!item) return null;
-
-                const attrs = item.attributes || {};
-                const mapped: any = {
-                    id: Number(item.id) || item.id,
-                    ...attrs,
-                };
-
-                if (item.type === 'artists') {
-                    mapped.type = 'artist';
-                    mapped.name = attrs.name ?? '';
-                    mapped.picture = resolveArtworkId(item, 'profileArt');
-                } else if (item.type === 'albums') {
-                    const artists = resolveArtists(item);
-                    mapped.type = 'album';
-                    mapped.title = attrs.title ?? '';
-                    mapped.cover = resolveArtworkId(item, 'coverArt');
-                    mapped.artists = artists;
-                    if (artists.length > 0) mapped.artist = artists[0];
-                } else if (item.type === 'tracks') {
-                    const artists = resolveArtists(item);
-                    mapped.type = 'track';
-                    mapped.title = attrs.title ?? '';
-                    mapped.artists = artists;
-                    if (artists.length > 0) mapped.artist = artists[0];
-                    const albumRef = item.relationships?.albums?.data?.[0];
-                    if (albumRef) {
-                        const albumItem = includedMap.get(`albums:${albumRef.id}`);
-                        mapped.album = {
-                            id: Number(albumRef.id),
-                            title: albumItem?.attributes?.title ?? '',
-                            cover: albumItem ? resolveArtworkId(albumItem, 'coverArt') : null,
-                        };
-                    }
-                } else if (item.type === 'videos') {
-                    const artists = resolveArtists(item);
-                    mapped.type = 'video';
-                    mapped.title = attrs.title ?? '';
-                    mapped.artists = artists;
-                    if (artists.length > 0) mapped.artist = artists[0];
-                    mapped.imageId = resolveArtworkId(item, 'image');
-                } else if (item.type === 'playlists') {
-                    mapped.type = 'playlist';
-                    mapped.title = attrs.name ?? '';
-                    mapped.image = resolveArtworkId(item, 'coverArt');
-                }
-
-                return mapped;
-            };
-
-            const relationships = jsonApi.data.relationships || {};
-            const mapBucket = (relName: string) => {
-                const relData = relationships[relName]?.data;
-                if (!Array.isArray(relData)) return undefined;
-                const items = relData.map(resolveItem).filter(Boolean);
-                return {
-                    items,
-                    totalNumberOfItems: items.length,
+        const legacySearch = async (
+            query: string,
+            bucket?: 'tracks' | 'artists' | 'albums' | 'videos' | 'playlists'
+        ) => {
+            const endpoint = bucket ? `https://api.tidal.com/v1/search/${bucket}` : 'https://api.tidal.com/v1/search';
+            const result = await this.#fetchJson<Record<string, unknown>>(
+                endpoint,
+                {
+                    query,
                     limit,
                     offset,
-                };
-            };
-
-            return {
-                artists: mapBucket('artists'),
-                albums: mapBucket('albums'),
-                tracks: mapBucket('tracks'),
-                videos: mapBucket('videos'),
-                playlists: mapBucket('playlists'),
-            };
+                    countryCode: this.#countryCode,
+                },
+                signal
+            );
+            const data = bucket ? { [bucket]: result } : result;
+            return HiFiClient.#jsonResponse({ version: HiFiClient.API_VERSION, data });
         };
 
         if (i) {
@@ -2268,70 +2183,21 @@ class HiFiClient {
                 if (err instanceof ResponseError && ![400, 404].includes(err.status)) throw err;
                 // fallback to text search
             }
-            const fallback = await this.#fetchJson<any>(
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(i)}`,
-                {
-                    limit,
-                    offset,
-                    include: 'tracks,tracks.artists,tracks.albums,tracks.albums.coverArt',
-                    countryCode: this.#countryCode,
-                },
-                signal
-            );
-            return HiFiClient.#jsonResponse({ version: HiFiClient.API_VERSION, data: parseOpenApiSearch(fallback) });
+            return legacySearch(i, 'tracks');
         }
 
-        const includeQ =
-            'albums,albums.coverArt,albums.artists,tracks,tracks.artists,tracks.albums,tracks.albums.coverArt,artists,playlists,videos';
-        const includeS = 'tracks,tracks.artists,tracks.albums,tracks.albums.coverArt';
-        const includeA = 'artists,artists.profileArt,tracks,tracks.artists,tracks.albums,tracks.albums.coverArt';
-        const includeAl = 'albums,albums.artists,albums.coverArt';
-        const includeV = 'videos,videos.artists,videos.image';
-        const includeP = 'playlists,playlists.coverArt';
+        if (q) return legacySearch(q);
 
-        const mapping: Array<[string | undefined, string, Params]> = [
-            [
-                q,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(q || '')}`,
-                {
-                    limit,
-                    offset,
-                    include: includeQ,
-                    countryCode: this.#countryCode,
-                },
-            ],
-            [
-                s,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(s || '')}`,
-                { limit, offset, include: includeS, countryCode: this.#countryCode },
-            ],
-            [
-                a,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(a || '')}`,
-                { limit, offset, include: includeA, countryCode: this.#countryCode },
-            ],
-            [
-                al,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(al || '')}`,
-                { limit, offset, include: includeAl, countryCode: this.#countryCode },
-            ],
-            [
-                v,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(v || '')}`,
-                { limit, offset, include: includeV, countryCode: this.#countryCode },
-            ],
-            [
-                p,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(p || '')}`,
-                { limit, offset, include: includeP, countryCode: this.#countryCode },
-            ],
+        const mapping: Array<[string | undefined, 'tracks' | 'artists' | 'albums' | 'videos' | 'playlists']> = [
+            [s, 'tracks'],
+            [a, 'artists'],
+            [al, 'albums'],
+            [v, 'videos'],
+            [p, 'playlists'],
         ];
 
-        for (const [val, url, params] of mapping) {
-            if (val) {
-                const data = await this.#fetchJson<any>(url, params, signal);
-                return HiFiClient.#jsonResponse({ version: HiFiClient.API_VERSION, data: parseOpenApiSearch(data) });
-            }
+        for (const [query, bucket] of mapping) {
+            if (query) return legacySearch(query, bucket);
         }
 
         throw new Error('Provide one of s, a, al, v, p, or i');

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { HiFiClient, TidalResponse } from './HiFi';
+import { HiFiClient, TidalResponse, type SearchResponse } from './HiFi';
 import type { Album, PlaybackInfo, Track } from './container-classes';
 
 const ARTIST_ID = 3523908; // deadmau5
@@ -167,6 +167,17 @@ test('Search', async () => {
                 q: query,
             }),
         async (_res) => {}
+    );
+});
+
+test('Search videos', async () => {
+    await checkRoute(
+        '/search/?v=Bob%20Dylan',
+        () => instance.search({ v: 'Bob Dylan', limit: 5 }),
+        async (result: { data: SearchResponse['data'] }) => {
+            expect(result.data.videos?.items.length).toBeGreaterThan(0);
+            expect(result.data.videos?.items[0]?.imageId).toBeTypeOf('string');
+        }
     );
 });
 

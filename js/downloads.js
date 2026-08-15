@@ -1369,12 +1369,20 @@ export async function downloadTrackWithMetadata(
             return;
         }
     }
-
-    const { enrichedTrack } = await tidalAPI.enrichTrack(track, { downloadQuality: quality });
-    const filename = buildTrackFilename(enrichedTrack, quality);
-
     const controller = abortController || new AbortController();
+    // Claim the operation before its first async lookup so rapid repeated clicks
+    // cannot start multiple enrichments for the same track.
     ongoingDownloads.add(downloadKey);
+
+    let enriched;
+    try {
+        enriched = await tidalAPI.enrichTrack(track, { downloadQuality: quality });
+    } catch (error) {
+        ongoingDownloads.delete(downloadKey);
+        throw error;
+    }
+    const { enrichedTrack } = enriched;
+    const filename = buildTrackFilename(enrichedTrack, quality);
 
     try {
         // Resolve the folder writer before registering the download task so that
@@ -1387,6 +1395,7 @@ export async function downloadTrackWithMetadata(
         const blob = await api.downloadTrack(track.id, quality, filename, {
             signal: controller.signal,
             track: enrichedTrack,
+            enriched,
             onProgress: (progress) => {
                 updateDownloadProgress(track.id, progress);
             },

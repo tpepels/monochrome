@@ -10,12 +10,22 @@ import {
     silenceRemovalSettings,
     crossfadeSettings,
     donationPromptSettings,
+    apiSettings,
 } from '../storage.js';
 
 describe('storage.js', () => {
     beforeEach(() => {
         localStorage.clear();
         vi.clearAllMocks();
+    });
+
+    describe('API instances', () => {
+        test('uses the healthy current fallback for self-hosted API and streaming requests', () => {
+            const instances = apiSettings._staticDefaultInstances();
+
+            expect(instances.api[0]).toEqual({ url: 'https://lol.samidy.workers.dev', version: '2.10' });
+            expect(instances.streaming).toEqual([{ url: 'https://lol.samidy.workers.dev', version: '2.10' }]);
+        });
     });
 
     describe('recentActivityManager', () => {
