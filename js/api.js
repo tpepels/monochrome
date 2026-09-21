@@ -34,6 +34,7 @@ import { isCustomFormat } from './ffmpegFormats.ts';
 import { DownloadProgress } from './progressEvents.js';
 import { resolveDownloadTotalBytes } from './downloadProgressUtils.js';
 import { readableStreamIterator } from './readableStreamIterator.js';
+import { tracksStreamerAPI } from './tracks-api.js';
 import { HiFiClient, TidalResponse } from './HiFi.ts';
 import { canUseNativeAmazonCenc, getAmazonDecrypterCodec, canBrowserStreamAtmosQuality } from './platform-detection.js';
 import {
@@ -2947,6 +2948,19 @@ export class LosslessAPI {
         }
 
         const track = await this.getTrackMetadata(id);
+
+        // Prefer the current upstream Tracks service, but keep the legacy
+        // Unified Playback/Deezer chain below as a fallback.
+        try {
+            const tracksResult = await tracksStreamerAPI.resolveTrackStream(id, quality, { track });
+            if (tracksResult?.url) {
+                this.streamCache.set(cacheKey, tracksResult);
+                return tracksResult;
+            }
+        } catch (error) {
+            console.debug('tracks.monochrome.st stream lookup failed:', error);
+        }
+
         const needsProxyDecryption = !canUseNativeAmazonCenc;
         let unifiedResult = null;
 
@@ -3121,11 +3135,39 @@ export class LosslessAPI {
         let externalMediaMimeType = null;
         let externalSourceUrl = null;
 
+        // Prefer upstream's current Tracks resolver for audio downloads.
+        // If it cannot resolve a track, the existing provider chain remains intact.
+        if (!isVideo && !devModeSettings.isEnabled()) {
+            try {
+                const tracksResult = await tracksStreamerAPI.resolveTrackStream(id, cleanQuality, { track });
+                if (tracksResult?.url) {
+                    externalStreamUrl = tracksResult.url;
+                    externalRgInfo = tracksResult.rgInfo || null;
+                    externalStreamType = tracksResult.playbackType || 'direct';
+                    externalProvider = 'monochrome';
+                    externalMimeType = tracksResult.mimeType || 'audio/flac';
+                    externalMediaMimeType = tracksResult.mediaMimeType || externalMimeType;
+                    externalSourceUrl = tracksResult.sourceUrl || externalStreamUrl;
+                    lookup = {
+                        info: {
+                            audioQuality: cleanQuality,
+                            trackReplayGain: externalRgInfo?.trackReplayGain ?? 0,
+                            trackPeakAmplitude: externalRgInfo?.trackPeakAmplitude ?? 1,
+                            albumReplayGain: externalRgInfo?.albumReplayGain ?? 0,
+                            albumPeakAmplitude: externalRgInfo?.albumPeakAmplitude ?? 1,
+                        },
+                    };
+                }
+            } catch (error) {
+                console.debug('tracks.monochrome.st lookup failed during download enrichment:', error);
+            }
+        }
+
         if (isVideo) {
             lookup = await this.getVideo(id);
         } else if (devModeSettings.isEnabled()) {
             lookup = new PlaybackInfo(await this.getTrackFromDevMode(id, cleanQuality));
-        } else {
+        } else if (!externalStreamUrl) {
             let unifiedResult = null;
             let deezerResult = null;
 
