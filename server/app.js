@@ -10,7 +10,7 @@ import { onRequest as retryDownloadRequest } from '../functions/api/downloads/[j
 import { onRequest as sweepDownloadsRequest } from '../functions/api/downloads/maintenance/sweep.js';
 import { jsonResponse } from './downloads/http.js';
 import { proxyHiFiRequest } from './hifi-proxy.js';
-import { proxyDeezerStream } from './provider-proxy.js';
+import { proxyDeezerStream, proxyTracksRequest } from './provider-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.PORT || '4173', 10);
@@ -173,6 +173,11 @@ const server = http.createServer(async (incoming, outgoing) => {
     try {
         if (incoming.url?.startsWith('/api/provider/deezer/stream')) {
             await proxyDeezerStream(incoming, outgoing);
+            return;
+        }
+
+        if (incoming.url?.startsWith('/api/provider/tracks')) {
+            await proxyTracksRequest(incoming, outgoing);
             return;
         }
 
