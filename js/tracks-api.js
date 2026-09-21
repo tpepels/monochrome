@@ -853,26 +853,29 @@ export class TracksStreamerAPI {
 
         if (!title) return null;
 
-        const searchQuery = `${artist} ${title}`.trim();
-        if (!searchQuery) return null;
+        const titleArtistQuery = `${artist} ${title}`.trim();
+        const isrcQuery = String(inputTrack?.isrc || '').trim();
+        const queries = [...new Set([isrcQuery, titleArtistQuery].filter(Boolean))];
+        if (queries.length === 0) return null;
 
         try {
-            const searchResult = await this.searchTracks(searchQuery, { limit: 6 });
-            const candidates = searchResult.items || [];
-            if (candidates.length === 0) {
-                this.resolutionCache.set(resKey, null);
-                return null;
-            }
-
             let bestCandidate = null;
             let bestScore = 0;
 
-            for (const candidate of candidates) {
-                const score = scoreTrackCandidate(candidate, inputTrack);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestCandidate = candidate;
+            for (const searchQuery of queries) {
+                const searchResult = await this.searchTracks(searchQuery, { limit: 6 });
+                const candidates = searchResult.items || [];
+
+                for (const candidate of candidates) {
+                    const score = scoreTrackCandidate(candidate, inputTrack);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestCandidate = candidate;
+                    }
                 }
+
+                // Exact ISRC match is definitive; no need to continue searching.
+                if (bestScore >= 200) break;
             }
 
             // Require minimum match threshold (85) or exact ISRC (200)
@@ -885,6 +888,12 @@ export class TracksStreamerAPI {
                 return this.getStreamUrl(resolvedTrackId, quality, { track: inputTrack || bestCandidate });
             }
 
+            console.debug('[TracksStreamerAPI] No suitable match found', {
+                title: inputTrack?.title || null,
+                artist,
+                isrc: isrcQuery || null,
+                bestScore,
+            });
             this.resolutionCache.set(resKey, null);
             return null;
         } catch (error) {
