@@ -906,4 +906,7 @@ export class TracksStreamerAPI {
     }
 }
 
-export const tracksStreamerAPI = new TracksStreamerAPI();
+const DEFAULT_TRACKS_CLIENT_BASE_URL =
+    typeof window !== 'undefined' ? '/api/provider/tracks' : TRACKS_API_BASE_URL;
+
+export const tracksStreamerAPI = new TracksStreamerAPI(DEFAULT_TRACKS_CLIENT_BASE_URL);
