@@ -258,5 +258,35 @@ describe('tracks-api module', () => {
             expect(stream.url).toBe('https://tracks.monochrome.st/track/157107766404747264');
             expect(externalTrack.tracksTrackId).toBe('157107766404747264');
         });
+
+        it('tries exact ISRC lookup before title and artist search', async () => {
+            const search = vi.spyOn(api, 'searchTracks').mockResolvedValueOnce({
+                items: [
+                    {
+                        trackId: '987654321',
+                        tracksTrackId: '987654321',
+                        title: 'The Thorn',
+                        artistNames: ['Example Artist'],
+                        isrc: 'USHM21078123',
+                        duration: 240,
+                    },
+                ],
+            });
+
+            const externalTrack = {
+                id: 'tidal:track:12345',
+                provider: 'tidal',
+                title: 'The Thorn',
+                artist: { name: 'Example Artist' },
+                isrc: 'USHM21078123',
+                duration: 240,
+            };
+
+            const stream = await api.resolveTrackStream(externalTrack);
+
+            expect(search).toHaveBeenCalledTimes(1);
+            expect(search).toHaveBeenCalledWith('USHM21078123', { limit: 6 });
+            expect(stream.url).toBe('https://tracks.monochrome.st/track/987654321');
+        });
     });
 });
