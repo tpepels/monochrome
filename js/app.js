@@ -6,6 +6,7 @@ import githubSvg from '../images/github.svg?svg&size=22';
 import { isIos, isSafari } from './platform-detection.js';
 import { hapticLight } from './haptics.js';
 import { MusicAPI } from './music-api.js';
+import { getTracksClientBaseUrl } from './tracks-api.js';
 import {
     apiSettings,
     themeManager,
@@ -68,23 +69,26 @@ if (typeof window !== 'undefined') {
         },
     });
 
-    // analytics
-    const plausibleScript = document.createElement('script');
-    plausibleScript.async = true;
-    plausibleScript.src = 'https://plausible.canine.tools/js/pa-dCMvQpiD1-AJmi8o3xviO.js';
-    document.head.appendChild(plausibleScript);
+    // Analytics are an upstream-host concern. Self-hosted instances avoid
+    // contacting the public Plausible endpoint entirely.
+    if (!getTracksClientBaseUrl().startsWith('/')) {
+        const plausibleScript = document.createElement('script');
+        plausibleScript.async = true;
+        plausibleScript.src = 'https://plausible.canine.tools/js/pa-dCMvQpiD1-AJmi8o3xviO.js';
+        document.head.appendChild(plausibleScript);
 
-    window.plausible =
-        window.plausible ||
-        function () {
-            (window.plausible.q = window.plausible.q || []).push(arguments);
-        };
-    window.plausible.init =
-        window.plausible.init ||
-        function (i) {
-            window.plausible.o = i || {};
-        };
-    window.plausible.init();
+        window.plausible =
+            window.plausible ||
+            function () {
+                (window.plausible.q = window.plausible.q || []).push(arguments);
+            };
+        window.plausible.init =
+            window.plausible.init ||
+            function (i) {
+                window.plausible.o = i || {};
+            };
+        window.plausible.init();
+    }
 }
 
 // Lazy-loaded modules
@@ -112,7 +116,7 @@ async function fetchcontributors() {
     if (contributorsLoaded) return;
     contributorsLoaded = true;
     try {
-        const response = await fetch('https://tracks.monochrome.st/contributors');
+        const response = await fetch(`${getTracksClientBaseUrl()}/contributors`);
         if (!response.ok) {
             contributorsLoaded = false;
             return;

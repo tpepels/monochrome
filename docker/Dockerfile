@@ -24,8 +24,11 @@ RUN bun install
 # Copy the rest of the project
 COPY . .
 
-# Build the project
-RUN bun run build
+# SELF-HOST INVARIANT:
+# Upstream HTML/JS uses images/monochrome_logo.svg as the runtime fallback for
+# failed artwork. Vite does not currently copy the root images/ directory into
+# dist, so keep this explicit copy or every failed cover creates a second 404.
+RUN bun run build && cp -r images dist/images
 
 # Serve with nginx
 FROM nginx:1.28.2-alpine

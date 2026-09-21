@@ -8,6 +8,65 @@
 export const TRACKS_API_BASE_URL = 'https://tracks.monochrome.st';
 
 /**
+ * SELF-HOST INVARIANT:
+ * Browser code must never call TRACKS_API_BASE_URL directly on a self-hosted
+ * origin. nginx exposes the Tracks service at /api/provider/tracks so metadata,
+ * audio, and artwork remain same-origin and do not trip CORS.
+ *
+ * Keep TRACKS_API_BASE_URL for server-side/direct official-host use only.
+ * After upstream rebases, run: bun run check:selfhost
+ */
+export function getTracksClientBaseUrl() {
+    if (typeof window === 'undefined') return TRACKS_API_BASE_URL;
+
+    const hostname = window.location?.hostname || '';
+    const isOfficialHost =
+        hostname === 'monochrome.st' ||
+        hostname.endsWith('.monochrome.st') ||
+        hostname === 'monochrome.tf' ||
+        hostname.endsWith('.monochrome.tf');
+
+    return isOfficialHost ? TRACKS_API_BASE_URL : '/api/provider/tracks';
+}
+
+/**
+ * SELF-HOST INVARIANT:
+ * Tracks/Rythm entity IDs are snowflake-like 17-20 digit IDs. A hard browser
+ * reload loses the in-memory provider caches, so these IDs must remain
+ * intrinsically recognizable or they can be misrouted into TIDAL.
+ */
+export function isTracksSnowflake(value) {
+    return /^\d{17,20}$/.test(String(value || '').replace(/^(?:tracks|mono):(?:(?:track|album|artist):)?/, ''));
+}
+
+/**
+ * SELF-HOST INVARIANT:
+ * Tracks may return absolute artwork URLs owned by tracks.monochrome.st.
+ * Rewrite those URLs through the active browser Tracks base. This helper must
+ * stay idempotent because normalized entities can pass through it more than once.
+ */
+export function getTracksClientAssetUrl(value) {
+    if (!value) return value;
+
+    const raw = String(value);
+    if (/^(?:data:|blob:)/i.test(raw)) return raw;
+
+    const clientBase = getTracksClientBaseUrl().replace(/\/+$/, '');
+    if (raw === clientBase || raw.startsWith(clientBase + '/')) {
+        return raw;
+    }
+    if (raw.startsWith(TRACKS_API_BASE_URL + '/')) {
+        return clientBase + raw.slice(TRACKS_API_BASE_URL.length);
+    }
+    if (raw.startsWith('/')) {
+        return clientBase + raw;
+    }
+
+    return raw;
+}
+
+
+/**
  * Cleans and normalizes string for fuzzy title/artist matching.
  * @param {string} str
  * @returns {string}
@@ -42,8 +101,8 @@ export function normalizeTracksTrack(item) {
         artistId: artistId ? String(artistId) : '',
         tracksArtistId: artistId ? String(artistId) : '',
         name: artistName,
-        avatar: item.artists?.[0]?.avatar || null,
-        picture: item.artists?.[0]?.avatar || null,
+        avatar: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
+        picture: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
         provider: 'tracks',
         _href: artistId ? `/artist/${artistId}` : '',
     };
@@ -57,8 +116,8 @@ export function normalizeTracksTrack(item) {
                 artistId: aid,
                 tracksArtistId: aid,
                 name: a.name || a.displayName || 'Unknown Artist',
-                avatar: a.avatar || null,
-                picture: a.avatar || null,
+                avatar: getTracksClientAssetUrl(a.avatar) || null,
+                picture: getTracksClientAssetUrl(a.avatar) || null,
                 provider: 'tracks',
                 _href: aid ? `/artist/${aid}` : '',
             };
@@ -78,7 +137,7 @@ export function normalizeTracksTrack(item) {
     }
 
     const releaseId = item.releaseId ? String(item.releaseId) : '';
-    const artwork = item.artwork || item.cover || '';
+    const artwork = getTracksClientAssetUrl(item.artwork || item.cover || '');
     const albumTitle = item.albumTitle || item.releaseTitle || (item.release && item.release.title) || '';
 
     const album = {
@@ -122,7 +181,7 @@ export function normalizeTracksTrack(item) {
         isUnavailable: item.playable === false,
         audioModes: ['LOSSLESS', 'STEREO'],
         audioQuality: 'LOSSLESS',
-        url: `${TRACKS_API_BASE_URL}/track/${trackId}`,
+        url: `${getTracksClientBaseUrl()}/track/${trackId}`,
         _href: `/track/${trackId}`,
     };
 }
@@ -146,7 +205,7 @@ export function normalizeTracksRelease(item) {
         artistId: artistId ? String(artistId) : '',
         tracksArtistId: artistId ? String(artistId) : '',
         name: artistName,
-        avatar: item.artists?.[0]?.avatar || null,
+        avatar: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
         provider: 'tracks',
         _href: artistId ? `/artist/${artistId}` : '',
     };
@@ -160,14 +219,14 @@ export function normalizeTracksRelease(item) {
                       artistId: aid,
                       tracksArtistId: aid,
                       name: a.name || a.displayName || 'Unknown Artist',
-                      avatar: a.avatar || null,
+                      avatar: getTracksClientAssetUrl(a.avatar) || null,
                       provider: 'tracks',
                       _href: aid ? `/artist/${aid}` : '',
                   };
               })
             : [primaryArtist];
 
-    const artwork = item.artwork || item.cover || '';
+    const artwork = getTracksClientAssetUrl(item.artwork || item.cover || '');
     const trackCount = item.trackCount || (Array.isArray(item.tracks) ? item.tracks.length : 0);
 
     return {
@@ -201,7 +260,7 @@ export function normalizeTracksArtist(item) {
     if (!item) return null;
     const artistId = String(item.artistId || item.id || '');
     const id = artistId;
-    const picture = item.avatar || item.picture || null;
+    const picture = getTracksClientAssetUrl(item.avatar || item.picture) || null;
     const name = item.displayName || item.name || 'Unknown Artist';
 
     return {
@@ -214,7 +273,7 @@ export function normalizeTracksArtist(item) {
         username: item.username || '',
         picture,
         avatar: picture,
-        banner: item.banner || null,
+        banner: getTracksClientAssetUrl(item.banner) || null,
         biography: item.bio || item.biography || '',
         popularity: 0,
         artistRoles: [],
@@ -231,7 +290,10 @@ export function normalizeTracksPlaylist(item) {
     if (!item) return null;
     const playlistId = String(item.playlistId || item.id || '');
     const id = playlistId;
-    const image = typeof item.thumbnail === 'string' && item.thumbnail.startsWith('http') ? item.thumbnail : '';
+    const image =
+        typeof item.thumbnail === 'string' && item.thumbnail
+            ? getTracksClientAssetUrl(item.thumbnail)
+            : '';
 
     return {
         id,
@@ -906,4 +968,4 @@ export class TracksStreamerAPI {
     }
 }
 
-export const tracksStreamerAPI = new TracksStreamerAPI();
+export const tracksStreamerAPI = new TracksStreamerAPI(getTracksClientBaseUrl());

@@ -10,9 +10,26 @@ import {
     extractTracksSuggestions,
     scoreTrackCandidate,
     TracksStreamerAPI,
+    getTracksClientBaseUrl,
+    getTracksClientAssetUrl,
+    isTracksSnowflake,
 } from '../tracks-api.js';
 
 describe('tracks-api module', () => {
+    describe('self-host routing helpers', () => {
+        it('recognizes Tracks snowflake entity IDs without cache context', () => {
+            expect(isTracksSnowflake('159504705419313152')).toBe(true);
+            expect(isTracksSnowflake('tracks:artist:159504705419313152')).toBe(true);
+            expect(isTracksSnowflake('123456789')).toBe(false);
+        });
+
+        it('rewrites Tracks-owned artwork through the active client base', () => {
+            expect(
+                getTracksClientAssetUrl('https://tracks.monochrome.st/proxy/mi/166516206571143168-1A01.jpg')
+            ).toBe(`${getTracksClientBaseUrl()}/proxy/mi/166516206571143168-1A01.jpg`);
+        });
+    });
+
     describe('cleanString', () => {
         it('normalizes accents, punctuation, and featuring tags', () => {
             expect(cleanString('Get Lucky (feat. Pharrell Williams)')).toBe('getlucky');
@@ -54,7 +71,7 @@ describe('tracks-api module', () => {
             expect(track.artist.id).toBe('153542153123926016');
             expect(track.artists.length).toBe(2);
             expect(track.album.id).toBe('155142458219433984');
-            expect(track.url).toBe('https://tracks.monochrome.st/track/155142501534011392');
+            expect(track.url).toBe(`${getTracksClientBaseUrl()}/track/155142501534011392`);
             expect(track._href).toBe('/track/155142501534011392');
             expect(track.audioQuality).toBe('LOSSLESS');
         });
@@ -83,7 +100,9 @@ describe('tracks-api module', () => {
             expect(album.tracksReleaseId).toBe('155142458219433984');
             expect(album.title).toBe('Random Access Memories');
             expect(album.artist.name).toBe('Daft Punk');
-            expect(album.cover).toBe('https://tracks.monochrome.st/proxy/mi/155142458219433984-1A01.jpg');
+            expect(album.cover).toBe(
+                getTracksClientAssetUrl('https://tracks.monochrome.st/proxy/mi/155142458219433984-1A01.jpg')
+            );
             expect(album.numberOfTracks).toBe(13);
             expect(album.type).toBe('ALBUM');
             expect(album._href).toBe('/album/155142458219433984');
@@ -106,7 +125,9 @@ describe('tracks-api module', () => {
             expect(artist.id).toBe('153542153123926016');
             expect(artist.artistId).toBe('153542153123926016');
             expect(artist.name).toBe('Daft Punk');
-            expect(artist.picture).toBe('https://tracks.monochrome.st/proxy/c/media/153542153123926016-5A04.jpg');
+            expect(artist.picture).toBe(
+                getTracksClientAssetUrl('https://tracks.monochrome.st/proxy/c/media/153542153123926016-5A04.jpg')
+            );
             expect(artist.biography).toBe('Electronic music duo');
             expect(artist._href).toBe('/artist/153542153123926016');
         });

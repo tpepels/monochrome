@@ -15,11 +15,43 @@ services:
         container_name: monochrome
         ports:
             - '${MONOCHROME_PORT:-3000}:4173'
+        depends_on:
+            monochrome-server:
+                condition: service_healthy
         restart: unless-stopped
         networks:
             - monochrome-network
         healthcheck:
             test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4173/']
+            interval: 30s
+            timeout: 3s
+            retries: 3
+            start_period: 5s
+
+    # Self-hosted download worker and same-origin Tracks proxy.
+    monochrome-server:
+        build:
+            context: ..
+            dockerfile: docker/Dockerfile.server
+        container_name: monochrome-server
+        environment:
+            PORT: 4174
+            DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/data/music}
+            TEMP_DIR: ${TEMP_DIR:-/tmp/monochrome-downloads}
+            DOWNLOAD_WORKER_ENABLED: ${DOWNLOAD_WORKER_ENABLED:-true}
+            DOWNLOAD_WORKER_CONCURRENCY: ${DOWNLOAD_WORKER_CONCURRENCY:-1}
+            DOWNLOAD_DUPLICATE_CHECK: ${DOWNLOAD_DUPLICATE_CHECK:-false}
+            DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS: ${DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS:-30000}
+            DOWNLOAD_TRANSIENT_MIN_AGE_MS: ${DOWNLOAD_TRANSIENT_MIN_AGE_MS:-900000}
+            TRACKS_API_BASE_URL: ${TRACKS_API_BASE_URL:-https://tracks.monochrome.st}
+        volumes:
+            - '${MONOCHROME_MUSIC_DIR:-../music}:/data/music'
+            - monochrome_download_tmp:/tmp/monochrome-downloads
+        restart: unless-stopped
+        networks:
+            - monochrome-network
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4174/api/health']
             interval: 30s
             timeout: 3s
             retries: 3
@@ -77,3 +109,4 @@ volumes:
     pb_data:
     pb_public:
     pb_hooks:
+    monochrome_download_tmp:

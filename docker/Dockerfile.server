@@ -1,0 +1,19 @@
+FROM oven/bun:1.3.11-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache bash curl wget ffmpeg
+
+COPY package.json bun.lock ./
+RUN bun install
+
+COPY server ./server
+COPY functions ./functions
+COPY js ./js
+
+ENV NODE_ENV=production
+ENV PORT=4174
+
+EXPOSE 4174
+
+CMD ["bun", "server/app.js"]
