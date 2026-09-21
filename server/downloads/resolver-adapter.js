@@ -253,7 +253,7 @@ function trackOrderInfo(track, index, albumTracks) {
 }
 
 function isExternalProviderResolutionError(error) {
-    return /Could not resolve audio stream from Amazon Music, Qobuz, or Deezer|Cannot resolve audio stream: Amazon Music failed/i.test(
+    return /Could not resolve audio stream from (?:Unified Playback|Amazon Music, Qobuz)(?: or|, or) Deezer|Cannot resolve audio stream: (?:Unified Playback|Amazon Music) failed/i.test(
         String(error?.message || error || '')
     );
 }

@@ -1,6 +1,6 @@
 import { Writable } from 'node:stream';
 import { describe, expect, test, vi } from 'vitest';
-import { buildDeezerProxyTarget, proxyDeezerStream } from './provider-proxy.js';
+import { buildDeezerProxyTarget, buildTracksProxyTarget, proxyDeezerStream, proxyTracksRequest } from './provider-proxy.js';
 
 function createOutgoing() {
     return {
@@ -164,4 +164,87 @@ describe('provider proxy', () => {
             )
         ).resolves.toBeUndefined();
     });
+
+    test('builds Tracks target from the local proxy path', () => {
+        const target = buildTracksProxyTarget(
+            '/api/provider/tracks/search/tracks?q=Dexter%20Wansel%20All%20Night%20Long&limit=6',
+            { TRACKS_API_BASE_URL: 'https://tracks.example' }
+        );
+
+        expect(target.href).toBe(
+            'https://tracks.example/search/tracks?q=Dexter%20Wansel%20All%20Night%20Long&limit=6'
+        );
+    });
+
+    test('proxies Tracks JSON requests without browser CORS involvement', async () => {
+        let received;
+        const fetchImpl = vi.fn((url, options) => {
+            received = { url, options };
+            return Promise.resolve(
+                new Response(JSON.stringify({ tracks: [] }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                })
+            );
+        });
+        const outgoing = createWritableOutgoing();
+
+        await proxyTracksRequest(
+            {
+                method: 'GET',
+                url: '/api/provider/tracks/search/tracks?q=test&limit=6',
+                headers: { accept: 'application/json', 'user-agent': 'test-agent' },
+            },
+            outgoing,
+            {
+                env: { TRACKS_API_BASE_URL: 'https://tracks.example' },
+                fetchImpl,
+            }
+        );
+
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(received.url.href).toBe('https://tracks.example/search/tracks?q=test&limit=6');
+        expect(received.options.method).toBe('GET');
+        expect(outgoing.statusCode).toBe(200);
+        expect(outgoing.headers.get('content-type')).toContain('application/json');
+        expect(outgoing.bodyText()).toBe(JSON.stringify({ tracks: [] }));
+    });
+
+    test('forwards range requests through the Tracks proxy', async () => {
+        let received;
+        const fetchImpl = vi.fn((url, options) => {
+            received = { url, options };
+            return Promise.resolve(
+                new Response(null, {
+                    status: 206,
+                    headers: {
+                        'accept-ranges': 'bytes',
+                        'content-range': 'bytes 0-99/1000',
+                        'content-type': 'audio/flac',
+                    },
+                })
+            );
+        });
+        const outgoing = createOutgoing();
+
+        await proxyTracksRequest(
+            {
+                method: 'HEAD',
+                url: '/api/provider/tracks/track/123456789',
+                headers: { range: 'bytes=0-99' },
+            },
+            outgoing,
+            {
+                env: { TRACKS_API_BASE_URL: 'https://tracks.example' },
+                fetchImpl,
+            }
+        );
+
+        expect(received.url.href).toBe('https://tracks.example/track/123456789');
+        expect(received.options.headers.range).toBe('bytes=0-99');
+        expect(outgoing.statusCode).toBe(206);
+        expect(outgoing.headers.get('content-type')).toBe('audio/flac');
+        expect(outgoing.headers.get('content-range')).toBe('bytes 0-99/1000');
+    });
+
 });

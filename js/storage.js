@@ -1,6 +1,6 @@
 //storage.js
 
-import { SVG_RIGHT_ARROW } from './icons';
+import { SVG_RIGHT_ARROW } from './runtime-icons.js';
 import { isIos, isSafari } from './platform-detection.js';
 
 export const apiSettings = {
