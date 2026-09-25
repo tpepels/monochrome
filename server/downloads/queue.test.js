@@ -243,7 +243,9 @@ describe('server download API', () => {
     test('preserves sanitized diagnostics for failed jobs', async () => {
         const originalExecutor = downloadQueue.memoryQueue.trackExecutor;
         downloadQueue.memoryQueue.trackExecutor = async () => {
-            const error = new Error('CDN fetch failed: HTTP 520 (cf-ray test-ray)');
+            const error = new Error(
+                'CDN fetch failed at https://cdn.example.test/audio.flac?token=secret&expires=123 HTTP 520'
+            );
             error.failureCode = 'CDN_FETCH_FAILED';
             error.status = 520;
             error.url = 'https://cdn.example.test/audio.flac?token=secret&expires=123';
@@ -295,6 +297,8 @@ describe('server download API', () => {
                     statusAtFailure: 'processing',
                 },
             });
+            expect(failed.error).toContain('https://cdn.example.test/audio.flac');
+            expect(failed.error).not.toContain('token=secret');
             expect(JSON.stringify(failed.diagnostics)).not.toContain('token=secret');
         } finally {
             downloadQueue.memoryQueue.trackExecutor = originalExecutor;
