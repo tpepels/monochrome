@@ -69,6 +69,7 @@ function sanitizeDiagnosticUrl(value) {
 }
 
 function numberOrNull(value) {
+    if (value == null || value === '') return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
 }
@@ -76,6 +77,10 @@ function numberOrNull(value) {
 function buildFailureDiagnostics(error, job, failedAt) {
     const progress = job.progress || {};
     const transfer = progress.trackTransfer || progress;
+    const currentTrack =
+        progress.currentTrack == null
+            ? null
+            : job.tracks?.find((track) => String(track?.id) === String(progress.currentTrack)) || null;
 
     return {
         error: {
@@ -104,7 +109,7 @@ function buildFailureDiagnostics(error, job, failedAt) {
             phase: progress.phase || job.publicationPhase || null,
             progressMessage: progress.message || null,
             currentTrack: progress.currentTrack || null,
-            currentTrackTitle: job.currentTrackTitle || null,
+            currentTrackTitle: currentTrack?.title || currentTrack?.name || null,
             completedTracks: numberOrNull(progress.completedTracks),
             totalTracks: numberOrNull(progress.totalTracks),
             downloadedBytes: numberOrNull(transfer?.downloadedBytes),
