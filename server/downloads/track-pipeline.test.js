@@ -163,6 +163,62 @@ test('retries a transient socket reset before response headers', async () => {
     expect(await fs.readFile(result.finalFile)).toEqual(audio);
 });
 
+test('retries transient Cloudflare 520 responses', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    let fetchCalls = 0;
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-cloudflare-520',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => {
+            fetchCalls++;
+            if (fetchCalls === 1) {
+                return new Response('origin error', {
+                    status: 520,
+                    headers: {
+                        'cf-ray': 'test-ray',
+                        'retry-after': '60',
+                    },
+                });
+            }
+            return new Response(audio);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(fetchCalls).toBe(2);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('does not retry non-retryable Cloudflare TLS errors', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-cloudflare-526',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                return new Response('invalid origin certificate', { status: 526 });
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({ failureCode: 'CDN_FETCH_FAILED', status: 526 });
+
+    expect(fetchCalls).toBe(1);
+});
+
 test('retries a mid-stream socket reset without duplicating partial bytes', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     let fetchCalls = 0;

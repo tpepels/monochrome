@@ -325,7 +325,13 @@ function isRetryableTransferError(error) {
 
     const status = Number(error?.status);
     if (Number.isFinite(status)) {
-        return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 504);
+        return (
+            status === 408 ||
+            status === 425 ||
+            status === 429 ||
+            (status >= 500 && status <= 504) ||
+            (status >= 520 && status <= 524)
+        );
     }
 
     const code = String(error?.code || error?.cause?.code || '').toUpperCase();
@@ -394,7 +400,15 @@ async function fetchAudioUrl(url, { fetchImpl = fetch, signal, env = {} } = {}) 
     });
 
     if (!response.ok) {
-        throw pipelineError(`CDN fetch failed: HTTP ${response.status}`, 'CDN_FETCH_FAILED', { status: response.status, url });
+        const cfRay = response.headers.get('cf-ray');
+        const retryAfter = response.headers.get('retry-after');
+        const suffix = cfRay ? ` (cf-ray ${cfRay})` : '';
+        throw pipelineError(`CDN fetch failed: HTTP ${response.status}${suffix}`, 'CDN_FETCH_FAILED', {
+            status: response.status,
+            url,
+            cfRay,
+            retryAfter,
+        });
     }
 
     return response;
