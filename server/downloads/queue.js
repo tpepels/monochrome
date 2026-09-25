@@ -54,6 +54,70 @@ function validationError(message, failureCode = 'INVALID_DOWNLOAD_REQUEST') {
     return error;
 }
 
+function sanitizeDiagnosticUrl(value) {
+    if (!value) return null;
+    try {
+        const url = new URL(String(value));
+        url.username = '';
+        url.password = '';
+        url.search = '';
+        url.hash = '';
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function numberOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+function buildFailureDiagnostics(error, job, failedAt) {
+    const progress = job.progress || {};
+    const transfer = progress.trackTransfer || progress;
+
+    return {
+        error: {
+            name: error?.name || 'Error',
+            failureCode: error?.failureCode || 'DOWNLOAD_JOB_FAILED',
+            httpStatus: numberOrNull(error?.status),
+            requestUrl: sanitizeDiagnosticUrl(error?.url),
+            cfRay: error?.cfRay || null,
+            retryAfter: error?.retryAfter || null,
+            provider: error?.provider || null,
+            transferAttempt: numberOrNull(error?.transferAttempt),
+            maxTransferAttempts: numberOrNull(error?.maxTransferAttempts),
+            segmentIndex: numberOrNull(error?.segmentIndex),
+            segmentCount: numberOrNull(error?.segmentCount),
+            duration: numberOrNull(error?.duration),
+            expectedDuration: numberOrNull(error?.expectedDuration),
+            extension: error?.extension || null,
+        },
+        state: {
+            jobId: job.jobId,
+            type: job.type,
+            id: job.id,
+            quality: job.quality,
+            queueAttempt: job.attempts,
+            statusAtFailure: job.status,
+            phase: progress.phase || job.publicationPhase || null,
+            progressMessage: progress.message || null,
+            currentTrack: progress.currentTrack || null,
+            currentTrackTitle: job.currentTrackTitle || null,
+            completedTracks: numberOrNull(progress.completedTracks),
+            totalTracks: numberOrNull(progress.totalTracks),
+            downloadedBytes: numberOrNull(transfer?.downloadedBytes),
+            totalBytes: numberOrNull(transfer?.totalBytes),
+            segmentIndex: numberOrNull(transfer?.segmentIndex),
+            segmentCount: numberOrNull(transfer?.segmentCount),
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            failedAt,
+        },
+    };
+}
+
 function normalizePayload(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw validationError('Request body must be a JSON object');
@@ -128,6 +192,8 @@ function summarizeJob(job) {
         result: job.result,
         error: job.error,
         failureCode: job.failureCode,
+        diagnostics: job.diagnostics || null,
+        attempts: job.attempts || 0,
         retryable: job.retryable,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
@@ -159,6 +225,7 @@ function createJob(payload, overrides = {}) {
         result: null,
         error: null,
         failureCode: null,
+        diagnostics: null,
         retryable: false,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -293,6 +360,7 @@ export class MemoryDownloadQueue {
             };
             job.error = null;
             job.failureCode = null;
+            job.diagnostics = null;
             job.retryable = false;
             job.completedAt = null;
             job.cancelledAt = null;
@@ -562,6 +630,7 @@ export class MemoryDownloadQueue {
             job.progress = baseProgress('Completed', { percent: 100, phase: 'completed' });
             job.error = null;
             job.failureCode = null;
+            job.diagnostics = null;
             job.retryable = false;
             job.completedAt = timestamp;
             job.updatedAt = timestamp;
@@ -578,6 +647,7 @@ export class MemoryDownloadQueue {
                 job.status = DOWNLOAD_JOB_STATUSES.FAILED;
                 job.error = error?.message || String(error);
                 job.failureCode = error?.failureCode || 'DOWNLOAD_JOB_FAILED';
+                job.diagnostics = buildFailureDiagnostics(error, job, timestamp);
                 job.retryable = isRetryableFailure(error);
                 job.progress = {
                     ...job.progress,
@@ -607,6 +677,8 @@ export class MemoryDownloadQueue {
             downloadedBytes,
             totalBytes: totalBytes || null,
             transferPercent,
+            segmentIndex: Number.isFinite(Number(transfer.segmentIndex)) ? Number(transfer.segmentIndex) : null,
+            segmentCount: Number.isFinite(Number(transfer.segmentCount)) ? Number(transfer.segmentCount) : null,
         };
         job.updatedAt = timestamp;
         this.persistJob(job).catch(() => {});
