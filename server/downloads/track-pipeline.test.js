@@ -131,6 +131,87 @@ test('streams audio responses without reading the response arrayBuffer', async (
     expect(response.arrayBuffer).not.toHaveBeenCalled();
 });
 
+test('retries a transient socket reset before response headers', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const calls = [];
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-fetch-retry',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async (_url, options) => {
+            calls.push(options);
+            if (calls.length === 1) {
+                const error = new Error(
+                    'The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()'
+                );
+                error.code = 'ECONNRESET';
+                throw error;
+            }
+            return new Response(audio);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(calls).toHaveLength(2);
+    expect(calls.every((options) => options.keepalive === false)).toBe(true);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('retries a mid-stream socket reset without duplicating partial bytes', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    let fetchCalls = 0;
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-stream-retry',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => {
+            fetchCalls++;
+            if (fetchCalls === 1) {
+                let readCount = 0;
+                const body = new ReadableStream({
+                    pull(controller) {
+                        if (readCount++ === 0) {
+                            controller.enqueue(audio.subarray(0, 1024));
+                            return;
+                        }
+
+                        const error = new Error('socket connection was closed unexpectedly');
+                        error.code = 'ECONNRESET';
+                        controller.error(error);
+                    },
+                });
+                return new Response(body, {
+                    headers: {
+                        'content-length': String(audio.length),
+                    },
+                });
+            }
+
+            return new Response(audio, {
+                headers: {
+                    'content-length': String(audio.length),
+                },
+            });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(fetchCalls).toBe(2);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
 test('reports streamed byte progress for server downloads', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     const progress = [];
