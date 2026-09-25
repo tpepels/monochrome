@@ -197,6 +197,41 @@ test('stages all tracks and publishes the complete album with cover atomically',
     expect(progress).toContain('completed');
 });
 
+test('publishes the album when the cover fetch fails', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-cover-403',
+        config,
+        resolver: resolverFor(albumResult()),
+        trackExecutor: successfulTrackExecutor(),
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cover.test/cover.jpg') {
+                return new Response('forbidden', { status: 403 });
+            }
+            return new Response('missing', { status: 404 });
+        },
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.warnings).toEqual([
+        {
+            failureCode: 'COVER_FETCH_FAILED',
+            message: 'Cover fetch failed: HTTP 403',
+            status: 403,
+        },
+    ]);
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, 'cover.jpg'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 test('reuses validated staged tracks after an interrupted album download', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),

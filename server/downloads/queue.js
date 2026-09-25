@@ -638,6 +638,7 @@ export class MemoryDownloadQueue {
                 finalAlbumDir: result.finalAlbumDir || null,
                 relativePath: result.relativePath || null,
                 publishMethod: result.publishMethod || null,
+                warnings: Array.isArray(result.warnings) ? result.warnings : [],
             };
             job.progress = baseProgress('Completed', { percent: 100, phase: 'completed' });
             job.error = null;
