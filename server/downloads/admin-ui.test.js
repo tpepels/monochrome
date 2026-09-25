@@ -13,6 +13,7 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain('Error details');
     expect(html).toContain('Copy diagnostics');
     expect(html).toContain('diagnostic-json');
+    expect(html).toContain('const POLL_MS = 15000;');
     expect(html).not.toContain('<script src=');
     expect(html).not.toContain('<link rel="stylesheet"');
 });
