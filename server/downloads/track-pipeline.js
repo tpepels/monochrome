@@ -362,14 +362,18 @@ async function waitBeforeTransferRetry(attempt, signal) {
     }
 
     await new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, DOWNLOAD_RETRY_BASE_DELAY_MS * attempt);
-        if (!signal) return;
-
+        let timer = null;
+        const finish = () => {
+            signal?.removeEventListener?.('abort', onAbort);
+            resolve();
+        };
         const onAbort = () => {
             clearTimeout(timer);
             reject(signal.reason || new DOMException('Aborted', 'AbortError'));
         };
-        signal.addEventListener('abort', onAbort, { once: true });
+
+        timer = setTimeout(finish, DOWNLOAD_RETRY_BASE_DELAY_MS * attempt);
+        signal?.addEventListener?.('abort', onAbort, { once: true });
     });
 }
 
