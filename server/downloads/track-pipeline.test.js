@@ -214,9 +214,50 @@ test('does not retry non-retryable Cloudflare TLS errors', async () => {
             },
             metadataEmbedder: noOpMetadataEmbedder,
         })
-    ).rejects.toMatchObject({ failureCode: 'CDN_FETCH_FAILED', status: 526 });
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        status: 526,
+        transferAttempt: 1,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
 
     expect(fetchCalls).toBe(1);
+});
+
+test('reports retry context after Cloudflare 520 retries are exhausted', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-cloudflare-520-exhausted',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                return new Response('origin error', {
+                    status: 520,
+                    headers: { 'cf-ray': 'exhausted-ray' },
+                });
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        status: 520,
+        cfRay: 'exhausted-ray',
+        transferAttempt: 3,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+
+    expect(fetchCalls).toBe(3);
 });
 
 test('retries a mid-stream socket reset without duplicating partial bytes', async () => {

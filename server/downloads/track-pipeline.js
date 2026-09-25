@@ -391,6 +391,20 @@ async function rollbackPartialSegment(filePath, size, fsOps = fs) {
     await fsOps.truncate(filePath, size);
 }
 
+function annotateTransferError(error, { url, attempt, segmentIndex, segmentCount }) {
+    if (!error || typeof error !== 'object') return error;
+    try {
+        error.url = error.url || url;
+        error.transferAttempt = error.transferAttempt || attempt;
+        error.maxTransferAttempts = error.maxTransferAttempts || DOWNLOAD_TRANSFER_MAX_ATTEMPTS;
+        error.segmentIndex = error.segmentIndex ?? segmentIndex;
+        error.segmentCount = error.segmentCount ?? segmentCount;
+    } catch {
+        // Some platform errors may be non-extensible; keep the original error.
+    }
+    return error;
+}
+
 async function fetchAudioUrl(url, { fetchImpl = fetch, signal, env = {} } = {}) {
     const response = await fetchImpl(url, {
         headers: headersForAudioUrl(url, env),
@@ -518,15 +532,25 @@ async function downloadToTempFile(
                 });
                 break;
             } catch (error) {
+                const context = {
+                    url: urls[index],
+                    attempt,
+                    segmentIndex: index,
+                    segmentCount: urls.length,
+                };
+
                 if (signal?.aborted) {
-                    throw signal.reason || error;
+                    throw annotateTransferError(signal.reason || error, context);
                 }
 
                 if (timeoutController.signal.aborted) {
                     const reason = timeoutController.signal.reason;
-                    if (reason?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') throw reason;
+                    if (reason?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') {
+                        throw annotateTransferError(reason, context);
+                    }
                 }
 
+                annotateTransferError(error, context);
                 await rollbackPartialSegment(tempFile, segmentStartSize, fsOps);
 
                 const retryable = isRetryableTransferError(error);

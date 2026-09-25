@@ -64,6 +64,18 @@ button:disabled { opacity:.45; cursor:default; }
 .small { font-size:12px; }
 .stalled { color:var(--warn); font-weight:650; }
 .error { color:var(--bad); margin-top:7px; overflow-wrap:anywhere; }
+.error-meta { color:var(--muted); font-size:12px; margin-top:3px; }
+.error-details { margin-top:9px; border:1px solid var(--border); border-radius:8px; background:var(--panel-2); }
+.error-details summary { cursor:pointer; padding:8px 10px; color:var(--text); font-weight:600; }
+.error-details[open] summary { border-bottom:1px solid var(--border); }
+.diagnostic-body { padding:10px; }
+.diagnostic-grid { display:grid; grid-template-columns:minmax(120px,auto) 1fr; gap:5px 12px; }
+.diagnostic-label { color:var(--muted); }
+.diagnostic-value { min-width:0; overflow-wrap:anywhere; }
+.diagnostic-value code { font-size:12px; }
+.diagnostic-actions { display:flex; justify-content:flex-end; margin:10px 0 7px; }
+.diagnostic-actions button { padding:5px 8px; font-size:12px; }
+.diagnostic-json { margin:0; padding:9px; max-height:260px; overflow:auto; border-radius:7px; background:var(--bg); color:var(--muted); font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
 .empty { border:1px dashed var(--border); border-radius:12px; padding:30px; text-align:center; color:var(--muted); }
 #message { min-height:20px; margin:0 0 10px; color:var(--muted); }
 @media (max-width:700px) {
@@ -123,6 +135,125 @@ function bytes(value) {
     if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MiB';
     if (n >= 1024) return Math.round(n / 1024) + ' KiB';
     return n + ' B';
+}
+
+function diagnosticRow(label, value, code) {
+    if (value == null || value === '') return '';
+    return '<div class="diagnostic-label">' + esc(label) + '</div>' +
+        '<div class="diagnostic-value">' + (code ? '<code>' + esc(value) + '</code>' : esc(value)) + '</div>';
+}
+
+function renderError(job) {
+    if (!job.error) return '';
+
+    const diagnostics = job.diagnostics || {
+        error: {
+            failureCode: job.failureCode || null
+        },
+        state: {
+            jobId: job.jobId,
+            type: job.type,
+            id: job.id,
+            quality: job.quality,
+            queueAttempt: job.attempts || null,
+            statusAtFailure: job.status,
+            phase: job.progress && job.progress.phase,
+            progressMessage: job.progress && job.progress.message,
+            currentTrack: job.progress && job.progress.currentTrack,
+            downloadedBytes: job.progress && job.progress.downloadedBytes,
+            totalBytes: job.progress && job.progress.totalBytes,
+            startedAt: job.startedAt,
+            failedAt: job.completedAt
+        }
+    };
+    const error = diagnostics.error || {};
+    const state = diagnostics.state || {};
+    const meta = [];
+
+    if (job.failureCode) meta.push(job.failureCode);
+    if (error.httpStatus) meta.push('HTTP ' + error.httpStatus);
+    if (error.transferAttempt) {
+        meta.push(
+            'transfer attempt ' + error.transferAttempt +
+            (error.maxTransferAttempts ? ' / ' + error.maxTransferAttempts : '')
+        );
+    }
+
+    let details = '';
+    if (job.status === 'failed') {
+        const segment =
+            error.segmentIndex != null
+                ? String(Number(error.segmentIndex) + 1) + (error.segmentCount ? ' / ' + error.segmentCount : '')
+                : null;
+        const stateSegment =
+            state.segmentIndex != null
+                ? String(Number(state.segmentIndex) + 1) + (state.segmentCount ? ' / ' + state.segmentCount : '')
+                : null;
+        const rows = [
+            diagnosticRow('Failure code', error.failureCode || job.failureCode, true),
+            diagnosticRow('HTTP status', error.httpStatus),
+            diagnosticRow('Request URL', error.requestUrl, true),
+            diagnosticRow('Cloudflare ray', error.cfRay, true),
+            diagnosticRow('Retry-After', error.retryAfter),
+            diagnosticRow('Provider', error.provider),
+            diagnosticRow('Transfer attempt', error.transferAttempt && (error.transferAttempt + (error.maxTransferAttempts ? ' / ' + error.maxTransferAttempts : ''))),
+            diagnosticRow('Segment', segment),
+            diagnosticRow('Job ID', state.jobId || job.jobId, true),
+            diagnosticRow('Queue attempt', state.queueAttempt || job.attempts),
+            diagnosticRow('State at failure', state.statusAtFailure),
+            diagnosticRow('Phase', state.phase),
+            diagnosticRow('Progress', state.progressMessage),
+            diagnosticRow('Current track', state.currentTrackTitle || state.currentTrack),
+            diagnosticRow('Tracks complete', state.completedTracks != null && state.totalTracks != null ? state.completedTracks + ' / ' + state.totalTracks : null),
+            diagnosticRow('Transferred', state.downloadedBytes != null ? bytes(state.downloadedBytes) + (state.totalBytes ? ' / ' + bytes(state.totalBytes) : '') : null),
+            diagnosticRow('Transfer segment', stateSegment),
+            diagnosticRow('Started', state.startedAt),
+            diagnosticRow('Failed', state.failedAt)
+        ].join('');
+
+        details =
+            '<details class="error-details">' +
+                '<summary>Error details</summary>' +
+                '<div class="diagnostic-body">' +
+                    '<div class="diagnostic-grid">' + rows + '</div>' +
+                    '<div class="diagnostic-actions"><button type="button" data-copy-diagnostics>Copy diagnostics</button></div>' +
+                    '<pre class="diagnostic-json">' + esc(JSON.stringify(diagnostics, null, 2)) + '</pre>' +
+                '</div>' +
+            '</details>';
+    }
+
+    return '<div class="error">' +
+        '<div>' + esc(job.error) + '</div>' +
+        (meta.length ? '<div class="error-meta">' + esc(meta.join(' · ')) + '</div>' : '') +
+        details +
+    '</div>';
+}
+
+async function copyDiagnostics(button) {
+    const pre = button.closest('details') && button.closest('details').querySelector('.diagnostic-json');
+    if (!pre) return;
+    const value = pre.textContent || '';
+
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            throw new Error('Clipboard API unavailable');
+        }
+    } catch {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+    }
+
+    const original = button.textContent;
+    button.textContent = 'Copied';
+    setTimeout(function () { button.textContent = original; }, 1200);
 }
 
 function setMessage(text, isError) {
@@ -236,7 +367,7 @@ function renderJobs(data) {
                 '<div class="detail-lines">' +
                     '<div>' + esc((job.progress && job.progress.message) || job.status) + ' · ' + p + '%</div>' +
                     '<div class="small">' + jobDetails(job) + '</div>' +
-                    (job.error ? '<div class="error">' + esc(job.error) + '</div>' : '') +
+                    renderError(job) +
                 '</div>' +
                 '<div class="job-actions">' +
                     (canCancel ? '<button data-cancel="' + esc(job.jobId) + '">Cancel</button>' : '') +
@@ -251,6 +382,9 @@ function renderJobs(data) {
     });
     root.querySelectorAll('[data-retry]').forEach(function (button) {
         button.addEventListener('click', function () { runJobAction(button, 'retry'); });
+    });
+    root.querySelectorAll('[data-copy-diagnostics]').forEach(function (button) {
+        button.addEventListener('click', function () { copyDiagnostics(button); });
     });
 }
 

@@ -10,6 +10,9 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain('Server downloads');
     expect(html).toContain('/api/downloads');
     expect(html).toContain('/api/downloads/reset');
+    expect(html).toContain('Error details');
+    expect(html).toContain('Copy diagnostics');
+    expect(html).toContain('diagnostic-json');
     expect(html).not.toContain('<script src=');
     expect(html).not.toContain('<link rel="stylesheet"');
 });
