@@ -343,7 +343,27 @@ export async function executeAlbumDownload({
         }
 
         assertNotAborted(signal);
-        await downloadCover(albumResult, stagingAlbumDir, { fetchImpl, fsOps, signal });
+        const warnings = [];
+        try {
+            await downloadCover(albumResult, stagingAlbumDir, { fetchImpl, fsOps, signal });
+        } catch (error) {
+            if (signal?.aborted || error?.name === 'AbortError') throw error;
+
+            const warning = {
+                failureCode: error?.failureCode || 'COVER_FETCH_FAILED',
+                message: error?.message || 'Cover download failed',
+                status: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
+            };
+            warnings.push(warning);
+            console.warn('[downloads] Cover unavailable; publishing album without cover:', warning.message);
+            onProgress?.({
+                phase: 'processing',
+                totalTracks: albumResult.tracks.length,
+                completedTracks: albumResult.tracks.length,
+                warning: warning.message,
+                warningCode: warning.failureCode,
+            });
+        }
 
         for (const writer of sidecarWriters) {
             assertNotAborted(signal);
@@ -380,6 +400,7 @@ export async function executeAlbumDownload({
             tracks: trackResults,
             relativePath: albumRelativePath,
             stagingAlbumDir,
+            warnings,
             ...publication,
         };
     } catch (error) {
