@@ -109,7 +109,7 @@ button:disabled { opacity:.45; cursor:default; }
 </main>
 
 <script>
-const POLL_MS = 1500;
+const POLL_MS = 15000;
 let busy = false;
 
 const esc = (value) =>
