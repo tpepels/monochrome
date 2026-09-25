@@ -240,6 +240,67 @@ describe('server download API', () => {
         expect(cancelBody.job.status).toBe('cancelled');
     });
 
+    test('preserves sanitized diagnostics for failed jobs', async () => {
+        const originalExecutor = downloadQueue.memoryQueue.trackExecutor;
+        downloadQueue.memoryQueue.trackExecutor = async () => {
+            const error = new Error('CDN fetch failed: HTTP 520 (cf-ray test-ray)');
+            error.failureCode = 'CDN_FETCH_FAILED';
+            error.status = 520;
+            error.url = 'https://cdn.example.test/audio.flac?token=secret&expires=123';
+            error.cfRay = 'test-ray';
+            error.retryAfter = '60';
+            error.transferAttempt = 3;
+            error.maxTransferAttempts = 3;
+            error.segmentIndex = 0;
+            error.segmentCount = 1;
+            throw error;
+        };
+
+        try {
+            const config = getDownloadsConfig({
+                TEMP_DIR: '/tmp/test-downloads',
+                DOWNLOAD_DIR: '/music',
+                DOWNLOAD_WORKER_ENABLED: 'true',
+            });
+            const queued = await downloadQueue.enqueue(
+                { type: 'track', id: 'diagnostic-track', quality: 'LOSSLESS' },
+                config
+            );
+            await downloadQueue.memoryQueue.waitForIdleForTests();
+
+            const failed = downloadQueue.memoryQueue.get(queued.jobId);
+            expect(failed).toMatchObject({
+                status: 'failed',
+                failureCode: 'CDN_FETCH_FAILED',
+                attempts: 1,
+                retryable: true,
+            });
+            expect(failed.diagnostics).toMatchObject({
+                error: {
+                    failureCode: 'CDN_FETCH_FAILED',
+                    httpStatus: 520,
+                    requestUrl: 'https://cdn.example.test/audio.flac',
+                    cfRay: 'test-ray',
+                    retryAfter: '60',
+                    transferAttempt: 3,
+                    maxTransferAttempts: 3,
+                    segmentIndex: 0,
+                    segmentCount: 1,
+                },
+                state: {
+                    jobId: queued.jobId,
+                    id: 'diagnostic-track',
+                    quality: 'LOSSLESS',
+                    queueAttempt: 1,
+                    statusAtFailure: 'processing',
+                },
+            });
+            expect(JSON.stringify(failed.diagnostics)).not.toContain('token=secret');
+        } finally {
+            downloadQueue.memoryQueue.trackExecutor = originalExecutor;
+        }
+    });
+
     test('retries a retryable failed job through the API', async () => {
         const originalExecutor = downloadQueue.memoryQueue.trackExecutor;
         downloadQueue.memoryQueue.trackExecutor = async () => {
