@@ -9,8 +9,30 @@ import {
     normalizeAppleArtist,
     normalizeAppleSearchResults,
 } from './apple-music-api.js';
-import { TracksStreamerAPI, tracksStreamerAPI, normalizeTracksSearchResults } from './tracks-api.js';
+import {
+    TracksStreamerAPI,
+    tracksStreamerAPI,
+    normalizeTracksSearchResults,
+    isTracksSnowflake,
+} from './tracks-api.js';
 import { getCommunityPlaylist } from './community-playlists.js';
+
+/**
+ * SELF-HOST INVARIANT:
+ * Leading-slash paths are already resolved browser URLs. In particular,
+ * /api/provider/tracks/proxy/... MUST pass through unchanged. If "/" is removed
+ * from this check, Monochrome will wrap the proxy path in resources.tidal.com
+ * and produce 403s such as .../images//api/provider/tracks/.../320x320.jpg.
+ *
+ * Srcset helpers below must use the same rule, otherwise the browser can still
+ * select a bogus TIDAL candidate even when img.src is correct.
+ */
+function isResolvedArtworkReference(value) {
+    return (
+        typeof value === 'string' &&
+        /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(value)
+    );
+}
 
 /**
  * MusicAPI - Singleton class that provides a unified interface for accessing music streaming services.
@@ -488,8 +510,13 @@ export class MusicAPI {
     // Stream methods
     async getStreamUrl(id, quality, options = {}) {
         let track = options?.track || this.getCachedTracksTrack(id) || this.getCachedAppleTrack(id);
+        const isApple = this.isAppleId(id) || track?.provider === 'apple';
 
-        if (!track && (this.isTracksId(id) || this.isAppleId(id) || /^\d{17,20}$/.test(String(id)))) {
+        // SELF-HOST INVARIANT:
+        // Short legacy/TIDAL IDs are external IDs, not Tracks stream IDs. Fetch
+        // their metadata first so Tracks can resolve by title/artist/ISRC.
+        // Never fall back to /track/<legacy-id>; that produces upstream 502s.
+        if (!track && !isApple) {
             track = await this.getTrackMetadata(id).catch(() => null);
         }
 
@@ -501,8 +528,16 @@ export class MusicAPI {
             return stream;
         }
 
-        const cleanId = this.getTracksId(id);
-        return this.tracksStreamerAPI.getStreamUrl(cleanId, quality, { track });
+        if (this.isTracksId(id, 'track') || this.isTracksId(id)) {
+            throw new Error(`Could not resolve native Tracks stream for track ID: ${id}`);
+        }
+
+        if (isApple) {
+            throw new Error(`Could not resolve Apple track through Tracks for track ID: ${id}`);
+        }
+
+        const cleanId = this.stripProviderPrefix(id);
+        return this.getAPI().getStreamUrl(cleanId, quality, { ...options, track });
     }
 
     usesSingleUsePlaybackUrls() {
@@ -518,14 +553,14 @@ export class MusicAPI {
         if (!id) {
             return 'images/monochrome_logo.svg';
         }
-        if (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/)/.test(id)) {
+        if (isResolvedArtworkReference(id)) {
             return id;
         }
         return this.tidalAPI.getCoverUrl(this.stripProviderPrefix(id), size);
     }
 
     getCoverSrcset(id) {
-        if (typeof id === 'string' && id.startsWith('blob:')) {
+        if (!id || isResolvedArtworkReference(id)) {
             return '';
         }
         return this.tidalAPI.getCoverSrcset(this.stripProviderPrefix(id));
@@ -535,7 +570,7 @@ export class MusicAPI {
         if (!imageId) {
             return null;
         }
-        if (typeof imageId === 'string' && imageId.startsWith('blob:')) {
+        if (isResolvedArtworkReference(imageId)) {
             return imageId;
         }
         return this.tidalAPI.getVideoCoverUrl(this.stripProviderPrefix(imageId), size);
@@ -574,11 +609,14 @@ export class MusicAPI {
         if (!id) {
             return 'images/monochrome_logo.svg';
         }
-        if (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/)/.test(id)) return id;
+        if (isResolvedArtworkReference(id)) return id;
         return this.tidalAPI.getArtistPictureUrl(this.stripProviderPrefix(id), size);
     }
 
     getArtistPictureSrcset(id) {
+        if (!id || isResolvedArtworkReference(id)) {
+            return '';
+        }
         return this.tidalAPI.getArtistPictureSrcset(this.stripProviderPrefix(id));
     }
 
@@ -651,14 +689,12 @@ export class MusicAPI {
         if (typeof id !== 'string') return false;
         if (id.startsWith(type ? `tracks:${type}:` : 'tracks:')) return true;
         if (id.startsWith('mono:')) return true;
-        if (/^\d{17,20}$/.test(id)) {
-            if (type === 'album' && this.tracksAlbumIds.has(id)) return true;
-            if (type === 'artist' && this.tracksArtistIds.has(id)) return true;
-            if (type === 'track' && this.tracksTrackCache.has(id)) return true;
-            if (!type) {
-                return this.tracksTrackCache.has(id) || this.tracksAlbumIds.has(id) || this.tracksArtistIds.has(id);
-            }
-        }
+
+        // SELF-HOST INVARIANT: Tracks/Rythm entity IDs are snowflakes. Treat
+        // them as provider-native even after a hard reload, when the in-memory
+        // provider caches are empty. Do not revert this to cache-only detection.
+        if (isTracksSnowflake(id)) return true;
+
         return false;
     }
 
@@ -765,12 +801,26 @@ export class MusicAPI {
 
     // Similar/recommendation methods
     async getSimilarArtists(artistId) {
+        if (this.isTracksId(artistId, 'artist') || this.tracksArtistIds.has(String(artistId))) {
+            const tracksId = this.getTracksId(artistId, 'artist');
+            const cached = this.tracksArtistCache.get(String(tracksId));
+            if (cached) return cached.similar || [];
+
+            try {
+                const artist = await this.getArtist(tracksId, 'tracks');
+                return artist?.similar || [];
+            } catch {
+                return [];
+            }
+        }
+
         if (this.isAppleId(artistId, 'artist') || this.appleArtistIds.has(String(artistId))) {
             const appleId = this.getAppleId(artistId, 'artist');
             const cached = this.appleArtistCache.get(String(appleId));
             if (cached) return cached.similar || [];
             return (await this.appleMusicSearchAPI.artistView(appleId, 'similar-artists')).map(normalizeAppleArtist);
         }
+
         const api = this.getAPI();
         const cleanId = this.stripProviderPrefix(artistId);
         return api.getSimilarArtists(cleanId);

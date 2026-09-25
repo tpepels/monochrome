@@ -29,7 +29,7 @@ import { isCustomFormat } from './ffmpegFormats.ts';
 import { DownloadProgress } from './progressEvents.js';
 import { resolveDownloadTotalBytes } from './downloadProgressUtils.js';
 import { readableStreamIterator } from './readableStreamIterator.js';
-import { tracksStreamerAPI } from './tracks-api.js';
+import { getTracksClientBaseUrl, isTracksSnowflake, tracksStreamerAPI } from './tracks-api.js';
 import { HiFiClient, TidalResponse } from './HiFi.ts';
 import { canBrowserStreamAtmosQuality } from './platform-detection.js';
 import {
@@ -897,8 +897,10 @@ export class LosslessAPI {
         if (cached) return cached;
 
         try {
+            const selfHosted = getTracksClientBaseUrl().startsWith('/');
             const response = await this.fetchWithRetry(`/search/?v=${encodeURIComponent(query)}`, {
                 ...options,
+                directOnly: options.directOnly ?? selfHosted,
             });
             const data = await response.json();
             const normalized = this.normalizeSearchResponse(data, 'videos');
@@ -944,6 +946,37 @@ export class LosslessAPI {
     async getAlbum(id) {
         const cached = await this.cache.get('album', id);
         if (cached) return cached;
+
+        const rawId = String(id || '');
+        const tracksAlbumId = rawId.replace(/^(?:tracks|mono):(?:album:)?/, '');
+        const isTracksNativeAlbum =
+            rawId.startsWith('tracks:') ||
+            rawId.startsWith('mono:') ||
+            /^\d{17,20}$/.test(tracksAlbumId);
+
+        if (isTracksNativeAlbum) {
+            try {
+                const tracksResult = await tracksStreamerAPI.getAlbum(tracksAlbumId);
+                if (tracksResult?.album) {
+                    let tracksAlbum = new Album(this.prepareAlbum(tracksResult.album));
+                    const tracks = (tracksResult.tracks || []).map((track) => {
+                        const prepared = this.prepareTrack(track);
+                        if (prepared.album && !prepared.album.cover && tracksAlbum.cover) {
+                            prepared.album = new TrackAlbum({
+                                ...prepared.album,
+                                cover: tracksAlbum.cover,
+                            });
+                        }
+                        return new Track(prepared);
+                    });
+                    const result = { album: tracksAlbum, tracks };
+                    await this.cache.set('album', id, result);
+                    return result;
+                }
+            } catch (error) {
+                console.warn('Tracks album lookup failed; trying legacy album providers:', error);
+            }
+        }
 
         const response = await this.fetchWithRetry(`/album/?id=${id}`);
         const jsonData = await response.json();
@@ -2832,17 +2865,43 @@ export class LosslessAPI {
             console.debug('tracks.monochrome.st stream lookup failed in LosslessAPI:', err);
         }
 
-        if (!streamResult?.url) {
-            const cleanId = String(id).replace(/^(?:tracks|mono):(?:track:)?/, '');
-            streamResult = tracksStreamerAPI.getStreamUrl(cleanId, quality, { track });
-        }
-
         if (streamResult?.url) {
             this.streamCache.set(cacheKey, streamResult);
             return streamResult;
         }
 
-        throw new Error(`Could not resolve stream URL for track ID: ${id}`);
+        const rawId = String(id || '');
+        const nativeTracksId =
+            rawId.startsWith('tracks:') ||
+            rawId.startsWith('mono:') ||
+            isTracksSnowflake(rawId);
+
+        if (nativeTracksId) {
+            throw new Error(`Could not resolve native Tracks stream for track ID: ${id}`);
+        }
+
+        // SELF-HOST INVARIANT:
+        // Never manufacture /track/<legacy-id> after a Tracks resolution miss.
+        // External IDs such as 553569385 must resolve by metadata first; if they
+        // do not, use the existing legacy fallbacks rather than sending the
+        // foreign ID to tracks.monochrome.st (which returns 502).
+        let fallback = null;
+        try {
+            fallback = await this.getUnifiedPlaybackStreamUrl(id, quality, { ...options, track });
+        } catch (error) {
+            console.debug('Unified Playback fallback failed:', error);
+        }
+
+        if (!fallback?.url && track?.isrc) {
+            fallback = await this.getDeezerStreamUrl(track.isrc, quality);
+        }
+
+        if (fallback?.url) {
+            this.streamCache.set(cacheKey, fallback);
+            return fallback;
+        }
+
+        throw new Error(`Could not resolve stream URL for external track ID: ${id}`);
     }
 
     async getVideoStreamUrl(id) {
@@ -2924,11 +2983,6 @@ export class LosslessAPI {
                 streamResult = await tracksStreamerAPI.resolveTrackStream(id, cleanQuality, { track });
             } catch (error) {
                 console.debug('tracks.monochrome.st lookup failed during download enrichment:', error);
-            }
-
-            if (!streamResult?.url) {
-                const cleanId = String(id).replace(/^(?:tracks|mono):(?:track:)?/, '');
-                streamResult = tracksStreamerAPI.getStreamUrl(cleanId, cleanQuality, { track });
             }
 
             if (streamResult?.url) {
@@ -3293,12 +3347,19 @@ export class LosslessAPI {
         }
     }
 
+    /*
+     * SELF-HOST INVARIANT:
+     * These legacy TIDAL artwork helpers are also reached by mixed-provider UI
+     * paths. A leading "/" is a fully resolved same-origin URL, especially
+     * /api/provider/tracks/proxy/.... Never feed it through the TIDAL image-ID
+     * formatter. The srcset helpers must make the same distinction.
+     */
     getCoverUrl(id, size = '320') {
         if (!id) {
             return 'images/monochrome_logo.svg';
         }
 
-        if (typeof id === 'string' && (id.startsWith('http') || id.startsWith('blob:') || id.startsWith('assets/'))) {
+        if (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(id)) {
             return id;
         }
 
@@ -3309,7 +3370,7 @@ export class LosslessAPI {
     getCoverSrcset(id) {
         if (
             !id ||
-            (typeof id === 'string' && (id.startsWith('http') || id.startsWith('blob:') || id.startsWith('assets/')))
+            (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(id))
         ) {
             return '';
         }
@@ -3324,7 +3385,7 @@ export class LosslessAPI {
             return 'images/monochrome_logo.svg';
         }
 
-        if (typeof id === 'string' && (id.startsWith('http') || id.startsWith('blob:') || id.startsWith('assets/'))) {
+        if (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(id)) {
             return id;
         }
 
@@ -3333,7 +3394,7 @@ export class LosslessAPI {
     }
 
     getArtistPictureSrcset(id) {
-        if (!id || (typeof id === 'string' && (id.startsWith('blob:') || id.startsWith('assets/')))) {
+        if (!id || (typeof id === 'string' && /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(id))) {
             return '';
         }
 
@@ -3349,7 +3410,7 @@ export class LosslessAPI {
 
         if (
             typeof imageId === 'string' &&
-            (imageId.startsWith('http') || imageId.startsWith('blob:') || imageId.startsWith('assets/'))
+            /^(?:https?:|blob:|data:|assets\/|images\/|\/)/.test(imageId)
         ) {
             return imageId;
         }

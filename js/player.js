@@ -233,7 +233,6 @@ export class Player {
                 bufferingGoal: 30,
                 rebufferingGoal: 2,
                 bufferBehind: 30,
-                jumpLargeGaps: true,
             },
             abr: {
                 enabled: true,

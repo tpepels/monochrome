@@ -22,11 +22,18 @@ import { BulkDownloadMethod, modernSettings } from './ModernSettings.js';
 import { SVG_CLOSE } from './icons.ts';
 import { MusicAPI } from './music-api.js';
 import { LyricsManager } from './lyrics.js';
+import { createSelfHostDownloadBridge } from './selfhost/downloads.js';
 
 const downloadTasks = new Map();
 const bulkDownloadTasks = new Map();
 const ongoingDownloads = new Set();
 let downloadNotificationContainer = null;
+
+// SELF-HOST INVARIANT/BOUNDARY: keep fork logic in js/selfhost/downloads.js; adapt only this seam after upstream changes.
+const selfHostDownloads = createSelfHostDownloadBridge({
+    showNotification, addDownloadTask, updateDownloadProgress, completeDownloadTask,
+    createBulkDownloadNotification, completeBulkDownload,
+});
 
 /** Wraps a single {@link WriterEntry}-like object as an AsyncIterable for use with IBulkDownloadWriter.write(). */
 async function* singleWriterEntry(entry) {
@@ -744,6 +751,8 @@ export async function downloadTracks(tracks, api, quality, _lyricsManager = null
 }
 
 export async function downloadAlbum(album, tracks, api, quality, _lyricsManager = null) {
+    if (await selfHostDownloads.tryQueueAlbum(album, tracks, quality)) return;
+
     const releaseDateStr =
         album.releaseDate || (tracks[0]?.streamStartDate ? tracks[0].streamStartDate.split('T')[0] : '');
     const releaseDate = releaseDateStr ? new Date(releaseDateStr) : null;
@@ -1169,6 +1178,7 @@ export async function downloadTrackWithMetadata(
         return;
     }
 
+    if (await selfHostDownloads.tryQueueTrack(track, quality, api)) return;
     const controller = abortController || new AbortController();
     // Claim the operation before its first async lookup so rapid repeated clicks
     // cannot start multiple enrichments for the same track.
