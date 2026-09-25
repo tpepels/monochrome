@@ -146,7 +146,26 @@ function diagnosticRow(label, value, code) {
 function renderError(job) {
     if (!job.error) return '';
 
-    const diagnostics = job.diagnostics || {};
+    const diagnostics = job.diagnostics || {
+        error: {
+            failureCode: job.failureCode || null
+        },
+        state: {
+            jobId: job.jobId,
+            type: job.type,
+            id: job.id,
+            quality: job.quality,
+            queueAttempt: job.attempts || null,
+            statusAtFailure: job.status,
+            phase: job.progress && job.progress.phase,
+            progressMessage: job.progress && job.progress.message,
+            currentTrack: job.progress && job.progress.currentTrack,
+            downloadedBytes: job.progress && job.progress.downloadedBytes,
+            totalBytes: job.progress && job.progress.totalBytes,
+            startedAt: job.startedAt,
+            failedAt: job.completedAt
+        }
+    };
     const error = diagnostics.error || {};
     const state = diagnostics.state || {};
     const meta = [];
@@ -161,7 +180,7 @@ function renderError(job) {
     }
 
     let details = '';
-    if (job.diagnostics) {
+    if (job.status === 'failed') {
         const segment =
             error.segmentIndex != null
                 ? String(Number(error.segmentIndex) + 1) + (error.segmentCount ? ' / ' + error.segmentCount : '')
@@ -198,7 +217,7 @@ function renderError(job) {
                 '<div class="diagnostic-body">' +
                     '<div class="diagnostic-grid">' + rows + '</div>' +
                     '<div class="diagnostic-actions"><button type="button" data-copy-diagnostics>Copy diagnostics</button></div>' +
-                    '<pre class="diagnostic-json">' + esc(JSON.stringify(job.diagnostics, null, 2)) + '</pre>' +
+                    '<pre class="diagnostic-json">' + esc(JSON.stringify(diagnostics, null, 2)) + '</pre>' +
                 '</div>' +
             '</details>';
     }
