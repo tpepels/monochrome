@@ -77,10 +77,11 @@ function numberOrNull(value) {
 function buildFailureDiagnostics(error, job, failedAt) {
     const progress = job.progress || {};
     const transfer = progress.trackTransfer || progress;
+    const diagnosticTrackId = progress.failedTrack || progress.currentTrack || null;
     const currentTrack =
-        progress.currentTrack == null
+        diagnosticTrackId == null
             ? null
-            : job.tracks?.find((track) => String(track?.id) === String(progress.currentTrack)) || null;
+            : job.tracks?.find((track) => String(track?.id) === String(diagnosticTrackId)) || null;
 
     return {
         error: {
@@ -108,7 +109,7 @@ function buildFailureDiagnostics(error, job, failedAt) {
             statusAtFailure: job.status,
             phase: progress.phase || job.publicationPhase || null,
             progressMessage: progress.message || null,
-            currentTrack: progress.currentTrack || null,
+            currentTrack: diagnosticTrackId,
             currentTrackTitle: currentTrack?.title || currentTrack?.name || null,
             completedTracks: numberOrNull(progress.completedTracks),
             totalTracks: numberOrNull(progress.totalTracks),
@@ -649,10 +650,10 @@ export class MemoryDownloadQueue {
                 job.completedAt = job.completedAt || timestamp;
                 job.retryable = false;
             } else {
+                job.diagnostics = buildFailureDiagnostics(error, job, timestamp);
                 job.status = DOWNLOAD_JOB_STATUSES.FAILED;
                 job.error = error?.message || String(error);
                 job.failureCode = error?.failureCode || 'DOWNLOAD_JOB_FAILED';
-                job.diagnostics = buildFailureDiagnostics(error, job, timestamp);
                 job.retryable = isRetryableFailure(error);
                 job.progress = {
                     ...job.progress,
