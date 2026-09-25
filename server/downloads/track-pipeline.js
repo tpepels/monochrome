@@ -21,6 +21,8 @@ const BROWSER_LIKE_HEADERS = Object.freeze({
 
 const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
+const DOWNLOAD_TRANSFER_MAX_ATTEMPTS = 3;
+const DOWNLOAD_RETRY_BASE_DELAY_MS = 250;
 
 function pipelineError(message, failureCode, details = {}) {
     const error = new Error(message);
@@ -318,20 +320,78 @@ function headersForAudioUrl() {
     return BROWSER_LIKE_HEADERS;
 }
 
+function isRetryableTransferError(error) {
+    if (!error || error?.name === 'AbortError' || error?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') return false;
+
+    const status = Number(error?.status);
+    if (Number.isFinite(status)) {
+        return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 504);
+    }
+
+    const code = String(error?.code || error?.cause?.code || '').toUpperCase();
+    if (
+        [
+            'ECONNRESET',
+            'ECONNREFUSED',
+            'ECONNABORTED',
+            'ETIMEDOUT',
+            'EPIPE',
+            'ENETRESET',
+            'ENETUNREACH',
+            'EHOSTUNREACH',
+            'CONNECTIONCLOSED',
+            'UND_ERR_SOCKET',
+        ].includes(code)
+    ) {
+        return true;
+    }
+
+    const message = String(error?.message || error).toLowerCase();
+    return (
+        message.includes('socket connection was closed unexpectedly') ||
+        message.includes('connection reset') ||
+        message.includes('premature close') ||
+        message.includes('fetch failed') ||
+        message.includes('network error')
+    );
+}
+
+async function waitBeforeTransferRetry(attempt, signal) {
+    if (signal?.aborted) {
+        throw signal.reason || new DOMException('Aborted', 'AbortError');
+    }
+
+    await new Promise((resolve, reject) => {
+        let timer = null;
+        const finish = () => {
+            signal?.removeEventListener?.('abort', onAbort);
+            resolve();
+        };
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+        };
+
+        timer = setTimeout(finish, DOWNLOAD_RETRY_BASE_DELAY_MS * attempt);
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+    });
+}
+
+async function rollbackPartialSegment(filePath, size, fsOps = fs) {
+    if (size <= 0) {
+        await fsOps.rm(filePath, { force: true }).catch(() => {});
+        return;
+    }
+    await fsOps.truncate(filePath, size);
+}
+
 async function fetchAudioUrl(url, { fetchImpl = fetch, signal, env = {} } = {}) {
-    let response = await fetchImpl(url, {
+    const response = await fetchImpl(url, {
         headers: headersForAudioUrl(url, env),
         cache: 'no-store',
+        keepalive: false,
         signal,
     });
-
-    if (!response.ok) {
-        response = await fetchImpl(url, {
-            headers: headersForAudioUrl(url, env),
-            cache: 'no-store',
-            signal,
-        });
-    }
 
     if (!response.ok) {
         throw pipelineError(`CDN fetch failed: HTTP ${response.status}`, 'CDN_FETCH_FAILED', { status: response.status, url });
@@ -399,53 +459,79 @@ async function downloadToTempFile(
     }
 
     for (let index = 0; index < urls.length; index++) {
-        const timeoutController = new AbortController();
-        const onAbort = () => timeoutController.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
-        if (signal?.aborted) onAbort();
-        else signal?.addEventListener('abort', onAbort, { once: true });
+        const segmentStartSize =
+            index === 0 ? 0 : (await fsOps.stat(tempFile).catch(() => null))?.size || 0;
 
-        let timeout = null;
-        const armTimeout = () => {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => {
-                timeoutController.abort(
-                    pipelineError(
-                        `Audio transfer stalled for ${Math.round(timeoutMs / 1000)} seconds`,
-                        'DOWNLOAD_FETCH_TIMEOUT'
-                    )
-                );
-            }, timeoutMs);
-        };
-        armTimeout();
+        for (let attempt = 1; attempt <= DOWNLOAD_TRANSFER_MAX_ATTEMPTS; attempt++) {
+            const timeoutController = new AbortController();
+            const onAbort = () => timeoutController.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
+            if (signal?.aborted) onAbort();
+            else signal?.addEventListener('abort', onAbort, { once: true });
 
-        try {
-            const response = await fetchAudioUrl(urls[index], {
-                fetchImpl,
-                signal: timeoutController.signal,
-                env,
-            });
+            let timeout = null;
+            let retryError = null;
+            const armTimeout = () => {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => {
+                    timeoutController.abort(
+                        pipelineError(
+                            `Audio transfer stalled for ${Math.round(timeoutMs / 1000)} seconds`,
+                            'DOWNLOAD_FETCH_TIMEOUT'
+                        )
+                    );
+                }, timeoutMs);
+            };
             armTimeout();
-            await writeResponseBodyToFile(response, tempFile, {
-                fsOps,
-                append: index > 0,
-                onProgress: (progress) => {
-                    armTimeout();
-                    onProgress?.({
-                        ...progress,
-                        segmentIndex: index,
-                        segmentCount: urls.length,
-                    });
-                },
-            });
-        } catch (error) {
-            if (timeoutController.signal.aborted && !signal?.aborted) {
-                const reason = timeoutController.signal.reason;
-                if (reason?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') throw reason;
+
+            try {
+                const response = await fetchAudioUrl(urls[index], {
+                    fetchImpl,
+                    signal: timeoutController.signal,
+                    env,
+                });
+                armTimeout();
+                await writeResponseBodyToFile(response, tempFile, {
+                    fsOps,
+                    append: index > 0,
+                    onProgress: (progress) => {
+                        armTimeout();
+                        onProgress?.({
+                            ...progress,
+                            segmentIndex: index,
+                            segmentCount: urls.length,
+                        });
+                    },
+                });
+                break;
+            } catch (error) {
+                if (signal?.aborted) {
+                    throw signal.reason || error;
+                }
+
+                if (timeoutController.signal.aborted) {
+                    const reason = timeoutController.signal.reason;
+                    if (reason?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') throw reason;
+                }
+
+                await rollbackPartialSegment(tempFile, segmentStartSize, fsOps);
+
+                const retryable = isRetryableTransferError(error);
+                if (!retryable || attempt === DOWNLOAD_TRANSFER_MAX_ATTEMPTS) {
+                    if (retryable && !error.failureCode) {
+                        error.failureCode = 'CDN_FETCH_FAILED';
+                        error.url = error.url || urls[index];
+                    }
+                    throw error;
+                }
+                retryError = error;
+            } finally {
+                clearTimeout(timeout);
+                signal?.removeEventListener?.('abort', onAbort);
             }
-            throw error;
-        } finally {
-            clearTimeout(timeout);
-            signal?.removeEventListener?.('abort', onAbort);
+
+            if (retryError) {
+                await waitBeforeTransferRetry(attempt, signal);
+            }
         }
     }
 }
