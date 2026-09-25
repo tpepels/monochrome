@@ -68,6 +68,12 @@ function sanitizeDiagnosticUrl(value) {
     }
 }
 
+function sanitizeErrorMessage(value) {
+    return String(value || 'Download failed').replace(/https?:\/\/[^\s"'<>]+/gi, (match) => {
+        return sanitizeDiagnosticUrl(match) || '[redacted URL]';
+    });
+}
+
 function numberOrNull(value) {
     if (value == null || value === '') return null;
     const number = Number(value);
@@ -652,7 +658,7 @@ export class MemoryDownloadQueue {
             } else {
                 job.diagnostics = buildFailureDiagnostics(error, job, timestamp);
                 job.status = DOWNLOAD_JOB_STATUSES.FAILED;
-                job.error = error?.message || String(error);
+                job.error = sanitizeErrorMessage(error?.message || String(error));
                 job.failureCode = error?.failureCode || 'DOWNLOAD_JOB_FAILED';
                 job.retryable = isRetryableFailure(error);
                 job.progress = {
@@ -719,7 +725,7 @@ export class MemoryDownloadQueue {
             job.trackProgress = event.trackProgress;
         }
         if (event.error) {
-            job.error = event.error;
+            job.error = sanitizeErrorMessage(event.error);
             job.failureCode = event.failureCode || job.failureCode;
         }
         job.updatedAt = timestamp;
