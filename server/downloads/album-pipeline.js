@@ -133,7 +133,7 @@ async function resolveReusableTrack({
     const currentHasPotential =
         checkCurrentStaging && (await hasPotentialTrackFile(stagingRoot, albumRelativePath, track, fsOps));
     const matchingSources = [];
-    for (const source of matchingSources) {
+    for (const source of candidateSources) {
         if (await hasPotentialTrackFile(source.root, albumRelativePath, track, fsOps)) {
             matchingSources.push(source);
         }
