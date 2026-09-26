@@ -365,6 +365,7 @@ describe('server download API', () => {
         });
         expect(retryBody.jobs).toHaveLength(1);
         expect(retryBody.jobs[0]).toMatchObject({
+            jobId: failed.jobId,
             id: 'failed-track',
             status: 'queued',
         });
@@ -383,12 +384,17 @@ describe('server download API', () => {
         });
         expect(resumeBody.jobs).toHaveLength(1);
         expect(resumeBody.jobs[0]).toMatchObject({
+            jobId: cancelled.jobId,
             id: 'cancelled-album',
             status: 'queued',
         });
 
         const snapshot = await downloadQueue.snapshot(config);
         expect(snapshot.recoverable).toEqual({ failed: 0, cancelled: 0 });
+        expect(snapshot.jobs.filter((job) => job.id === 'failed-track')).toHaveLength(1);
+        expect(snapshot.jobs.filter((job) => job.id === 'cancelled-album')).toHaveLength(1);
+        expect(snapshot.jobs.find((job) => job.id === 'failed-track')?.jobId).toBe(failed.jobId);
+        expect(snapshot.jobs.find((job) => job.id === 'cancelled-album')?.jobId).toBe(cancelled.jobId);
 
         const secondRetry = await onRetryFailedRequest(
             context(new Request('https://example.test/api/downloads/retry-failed', { method: 'POST' }))
@@ -401,6 +407,38 @@ describe('server download API', () => {
         );
         const secondResumeBody = await secondResume.json();
         expect(secondResumeBody).toMatchObject({ matched: 0, unique: 0 });
+    });
+
+    test('compacts duplicate queue history to one canonical entry per reference', async () => {
+        const queue = new MemoryDownloadQueue({ persistToDisk: false });
+        const config = getDownloadsConfig({
+            TEMP_DIR: '/tmp/test-downloads',
+            DOWNLOAD_DIR: '/music',
+            DOWNLOAD_WORKER_ENABLED: 'false',
+        });
+        const basePayload = { type: 'album', id: 'same-album', quality: 'LOSSLESS' };
+
+        const older = createJob(basePayload, { jobId: 'old-failed', status: 'failed' });
+        older.updatedAt = '2026-09-26T18:00:00.000Z';
+        older.failureCode = 'CDN_FETCH_FAILED';
+
+        const newer = createJob(basePayload, { jobId: 'new-cancelled', status: 'cancelled' });
+        newer.updatedAt = '2026-09-26T19:00:00.000Z';
+        newer.cancelledAt = newer.updatedAt;
+
+        queue.jobs.set(older.jobId, older);
+        queue.jobs.set(newer.jobId, newer);
+        queue.order.push(older.jobId, newer.jobId);
+
+        const snapshot = await queue.snapshot(config);
+
+        expect(snapshot.jobs).toHaveLength(1);
+        expect(snapshot.jobs[0]).toMatchObject({
+            jobId: 'new-cancelled',
+            id: 'same-album',
+            status: 'cancelled',
+        });
+        expect(queue.order).toEqual(['new-cancelled']);
     });
 
     test('retries a retryable failed job through the API', async () => {
@@ -430,9 +468,11 @@ describe('server download API', () => {
             const body = await response.json();
 
             expect(response.status).toBe(202);
-            expect(body.jobId).toBeTruthy();
-            expect(body.jobId).not.toBe(failed.jobId);
+            expect(body.jobId).toBe(failed.jobId);
             expect(body.job.status).toBe('queued');
+
+            const snapshot = await downloadQueue.snapshot(config);
+            expect(snapshot.jobs.filter((job) => job.id === 'retry-track')).toHaveLength(1);
         } finally {
             downloadQueue.memoryQueue.trackExecutor = originalExecutor;
         }
