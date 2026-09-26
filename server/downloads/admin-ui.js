@@ -336,6 +336,10 @@ function jobDetails(job) {
         lines.push(esc(text));
     }
 
+    if (job.status === 'cancelled' && job.cancelReason) {
+        lines.push('Cancellation: ' + esc(job.cancelReason));
+    }
+
     const updated = Date.parse(job.updatedAt || '');
     const staleSeconds = Number.isFinite(updated) ? Math.floor((Date.now() - updated) / 1000) : 0;
     const stalled = job.status === 'processing' && staleSeconds >= 120;
