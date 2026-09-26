@@ -548,6 +548,11 @@ export class MemoryDownloadQueue {
             counts[job.status] = (counts[job.status] || 0) + 1;
         }
 
+        const recoverable = {
+            failed: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.FAILED && !job.requeuedAsJobId).length,
+            cancelled: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.CANCELLED && !job.requeuedAsJobId).length,
+        };
+
         return {
             success: true,
             backend: this.backend,
@@ -567,6 +572,7 @@ export class MemoryDownloadQueue {
             },
             config: publicConfig(config),
             counts,
+            recoverable,
             jobs,
         };
     }
