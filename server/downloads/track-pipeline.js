@@ -77,7 +77,10 @@ function getAlbumTitle(track) {
 }
 
 function getTrackNumber(track) {
-    const value = Number.parseInt(String(track?.trackNumber || track?.number || 1), 10);
+    const value = Number.parseInt(
+        String(track?.trackNumber || track?.number || track?.downloadOrder?.trackNumber || 1),
+        10
+    );
     return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
@@ -91,6 +94,72 @@ export function buildTrackRelativePath(track, extension) {
     const artist = sanitizePathComponent(getAlbumArtistName(track), 'Unknown Artist');
     const album = sanitizePathComponent(getAlbumTitle(track), 'Unknown Album');
     return path.join(artist, album, buildTrackFileName(track, extension));
+}
+
+function extensionFromMimeType(value) {
+    const mime = String(value || '').toLowerCase();
+    if (mime.includes('flac')) return 'flac';
+    if (mime.includes('wav')) return 'wav';
+    if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
+    if (mime.includes('ogg')) return 'ogg';
+    if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('aac')) return 'm4a';
+    return null;
+}
+
+function extensionFromUrl(value) {
+    if (!value) return null;
+    try {
+        const pathname = new URL(String(value)).pathname.toLowerCase();
+        const match = pathname.match(/\.([a-z0-9]+)$/);
+        const extension = match?.[1] || null;
+        return ['flac', 'm4a', 'mp4', 'mp3', 'ogg', 'wav'].includes(extension) ? extension : null;
+    } catch {
+        return null;
+    }
+}
+
+export function expectedAudioExtensions(resolved = {}, quality = resolved.quality) {
+    const values = [
+        extensionFromMimeType(resolved.mediaMimeType),
+        extensionFromMimeType(resolved.manifestMimeType),
+        extensionFromUrl(resolved.streamUrl),
+        extensionFromUrl(resolved.sourceUrl),
+        defaultExtensionForQuality(quality),
+    ];
+
+    return [...new Set(values.filter(Boolean).map((extension) => (extension === 'mp4' ? 'm4a' : extension)))];
+}
+
+export async function findExistingTrackFile(
+    resolved,
+    { root, relativeDirectory = null, fsOps = fs, requireDuration = true } = {}
+) {
+    if (!root) return null;
+
+    for (const extension of expectedAudioExtensions(resolved)) {
+        const relativePath = relativeDirectory
+            ? path.join(relativeDirectory, buildTrackFileName(resolved.metadata, extension))
+            : buildTrackRelativePath(resolved.metadata, extension);
+        const filePath = path.resolve(root, relativePath);
+        const resolvedRoot = path.resolve(root);
+        if (!filePath.startsWith(resolvedRoot + path.sep) && filePath !== resolvedRoot) continue;
+        if (!(await pathExists(filePath, fsOps))) continue;
+
+        try {
+            const validation = await validateAudioFile(filePath, resolved, { fsOps, requireDuration });
+            return {
+                finalFile: filePath,
+                relativePath,
+                validation,
+                extension: validation.extension || extension,
+            };
+        } catch {
+            // Existing files are never deleted here. Invalid or incomplete
+            // candidates are ignored and the normal download path continues.
+        }
+    }
+
+    return null;
 }
 
 function assertSafeRelativePath(relativePath) {
@@ -727,6 +796,26 @@ export async function executeTrackDownload({
             resolved = await resolver.resolveTrackDownload(id, quality, { track });
         }
         assertNotPreview(resolved);
+
+        const existing = await findExistingTrackFile(resolved, {
+            root: config.downloadRoot,
+            relativeDirectory,
+            fsOps,
+        });
+        if (existing) {
+            return {
+                success: true,
+                jobId,
+                resolved,
+                validation: existing.validation,
+                metadata: buildMetadata(resolved),
+                metadataResult: { embedded: true, method: 'existing' },
+                finalFile: existing.finalFile,
+                relativePath: existing.relativePath,
+                action: 'skipped-existing-valid',
+                publishMethod: 'reuse',
+            };
+        }
 
         if (resolved.decryptionKey) {
             const encryptedFile = path.join(jobTempDir, 'track.encrypted');

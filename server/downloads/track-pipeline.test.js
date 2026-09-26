@@ -554,7 +554,7 @@ test('rejects corrupt non-audio downloads', async () => {
     ).rejects.toMatchObject({ failureCode: 'UNSUPPORTED_AUDIO_CONTAINER' });
 });
 
-test('skips publication when an existing final file is identical and valid', async () => {
+test('skips network transfer when an existing final file is already valid', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
         downloadRoot: path.join(root, 'music'),
@@ -563,16 +563,18 @@ test('skips publication when an existing final file is identical and valid', asy
     await fs.mkdir(path.dirname(finalFile), { recursive: true });
     await fs.writeFile(finalFile, wavBuffer({ durationSeconds: 2 }));
 
+    const fetchImpl = vi.fn(fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }));
     const result = await executeTrackDownload({
         id: 'track1',
         config,
         resolver: resolverFor(resolvedTrack()),
-        fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }),
+        fetchImpl,
         metadataEmbedder: noOpMetadataEmbedder,
     });
 
-    expect(result.action).toBe('skipped-identical');
+    expect(result.action).toBe('skipped-existing-valid');
     expect(result.finalFile).toBe(finalFile);
+    expect(fetchImpl).not.toHaveBeenCalled();
 });
 
 test('falls back to copy/unlink when final rename crosses devices', async () => {

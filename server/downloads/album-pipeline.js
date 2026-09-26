@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getDownloadsConfig } from './config.js';
 import { InMemoryMaintenanceLock } from './maintenance.js';
 import { createResolverAdapter } from './resolver-adapter.js';
-import { buildTrackFileName, executeTrackDownload, validateAudioFile } from './track-pipeline.js';
+import { buildTrackFileName, executeTrackDownload, findExistingTrackFile } from './track-pipeline.js';
 import { LIBRARY_STAGING_DIR } from './constants.js';
 
 const COVER_HEADERS = Object.freeze({
@@ -69,68 +69,130 @@ async function pathExists(filePath, fsOps = fs) {
     }
 }
 
-async function listAudioFiles(dir, fsOps = fs) {
-    const entries = await fsOps.readdir(dir, { withFileTypes: true }).catch(() => []);
-    const files = [];
-    for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            files.push(...(await listAudioFiles(fullPath, fsOps)));
-        } else if (/\.(flac|m4a|mp4|mp3|ogg|wav)$/i.test(entry.name)) {
-            const stat = await fsOps.stat(fullPath).catch(() => null);
-            if (stat?.size > 0) files.push(fullPath);
-        }
+async function listPreviousStagingRoots(downloadRoot, currentJobId, fsOps = fs) {
+    const stagingBase = path.resolve(downloadRoot, LIBRARY_STAGING_DIR);
+    const entries = await fsOps.readdir(stagingBase, { withFileTypes: true }).catch(() => []);
+
+    return entries
+        .filter((entry) => entry.isDirectory() && entry.name !== String(currentJobId))
+        .map((entry) => path.join(stagingBase, entry.name, 'staging'));
+}
+
+const REUSABLE_AUDIO_EXTENSIONS = ['flac', 'm4a', 'mp4', 'mp3', 'ogg', 'wav'];
+
+async function hasPotentialTrackFile(root, albumRelativePath, track, fsOps = fs) {
+    if (!root) return false;
+    for (const extension of REUSABLE_AUDIO_EXTENSIONS) {
+        const candidate = path.resolve(root, albumRelativePath, buildTrackFileName(track, extension));
+        if (await pathExists(candidate, fsOps)) return true;
     }
-    return files;
+    return false;
 }
 
-async function isExistingAlbumComplete(finalAlbumDir, expectedTracks, fsOps = fs) {
-    const files = await listAudioFiles(finalAlbumDir, fsOps);
-    return files.length >= expectedTracks;
+async function resolveTrackOnce(track, quality, resolver, cache) {
+    const key = String(track.id);
+    if (cache.has(key)) return cache.get(key);
+    const resolved = await resolver.resolveTrackDownload(track.id, quality, { track });
+    cache.set(key, resolved);
+    return resolved;
 }
 
-const RESUMABLE_AUDIO_EXTENSIONS = ['flac', 'm4a', 'mp3', 'ogg', 'wav', 'mp4'];
-
-async function resolveReusableStagedTrack({
-    track,
+async function isExpectedAlbumComplete({
+    albumResult,
     quality,
     resolver,
-    stagingRoot,
+    resolvedCache,
+    downloadRoot,
     albumRelativePath,
     fsOps = fs,
 } = {}) {
-    const stagingAlbumDir = path.resolve(stagingRoot, albumRelativePath);
-    const stagedEntries = await fsOps.readdir(stagingAlbumDir, { withFileTypes: true }).catch(() => []);
-    const hasStagedAudio = stagedEntries.some(
-        (entry) => entry.isFile() && RESUMABLE_AUDIO_EXTENSIONS.some((extension) => entry.name.endsWith(`.${extension}`))
-    );
-    if (!hasStagedAudio) return { resolved: null, result: null };
+    for (const track of albumResult.tracks) {
+        if (!(await hasPotentialTrackFile(downloadRoot, albumRelativePath, track, fsOps))) return false;
+        const resolved = await resolveTrackOnce(track, quality, resolver, resolvedCache);
+        const existing = await findExistingTrackFile(resolved, {
+            root: downloadRoot,
+            relativeDirectory: albumRelativePath,
+            fsOps,
+        });
+        if (!existing) return false;
+    }
+    return albumResult.tracks.length > 0;
+}
 
-    const resolved = await resolver.resolveTrackDownload(track.id, quality, { track });
-
-    for (const extension of RESUMABLE_AUDIO_EXTENSIONS) {
-        const relativePath = path.join(albumRelativePath, buildTrackFileName(resolved.metadata, extension));
-        const finalFile = path.resolve(stagingRoot, relativePath);
-        if (!(await pathExists(finalFile, fsOps))) continue;
-
-        try {
-            const validation = await validateAudioFile(finalFile, resolved, { fsOps });
-            return {
-                resolved,
-                result: {
-                    success: true,
-                    id: track.id,
-                    resolved,
-                    validation,
-                    finalFile,
-                    relativePath,
-                    action: 'resumed-staged-track',
-                    publishMethod: 'reuse',
-                },
-            };
-        } catch {
-            await fsOps.rm(finalFile, { force: true }).catch(() => {});
+async function resolveReusableTrack({
+    track,
+    quality,
+    resolver,
+    resolvedCache,
+    stagingRoot,
+    albumRelativePath,
+    candidateSources = [],
+    checkCurrentStaging = false,
+    fsOps = fs,
+} = {}) {
+    const currentHasPotential =
+        checkCurrentStaging && (await hasPotentialTrackFile(stagingRoot, albumRelativePath, track, fsOps));
+    const matchingSources = [];
+    for (const source of candidateSources) {
+        if (await hasPotentialTrackFile(source.root, albumRelativePath, track, fsOps)) {
+            matchingSources.push(source);
         }
+    }
+
+    if (!currentHasPotential && matchingSources.length === 0) {
+        return { resolved: null, result: null };
+    }
+
+    const resolved = await resolveTrackOnce(track, quality, resolver, resolvedCache);
+
+    const current = currentHasPotential
+        ? await findExistingTrackFile(resolved, {
+              root: stagingRoot,
+              relativeDirectory: albumRelativePath,
+              fsOps,
+          })
+        : null;
+    if (current) {
+        return {
+            resolved,
+            result: {
+                success: true,
+                id: track.id,
+                resolved,
+                validation: current.validation,
+                finalFile: current.finalFile,
+                relativePath: current.relativePath,
+                action: 'resumed-staged-track',
+                publishMethod: 'reuse',
+            },
+        };
+    }
+
+    for (const source of candidateSources) {
+        const existing = await findExistingTrackFile(resolved, {
+            root: source.root,
+            relativeDirectory: albumRelativePath,
+            fsOps,
+        });
+        if (!existing) continue;
+
+        const targetFile = path.resolve(stagingRoot, existing.relativePath);
+        await fsOps.mkdir(path.dirname(targetFile), { recursive: true });
+        await fsOps.copyFile(existing.finalFile, targetFile);
+
+        return {
+            resolved,
+            result: {
+                success: true,
+                id: track.id,
+                resolved,
+                validation: existing.validation,
+                finalFile: targetFile,
+                relativePath: existing.relativePath,
+                action: source.action,
+                publishMethod: 'local-reuse',
+            },
+        };
     }
 
     return { resolved, result: null };
@@ -228,7 +290,6 @@ export async function executeAlbumDownload({
     metadataEmbedder,
     publishLock = defaultPublishLock,
     sidecarWriters = [],
-    skipExistingComplete = false,
     album = null,
     tracks = null,
     onProgress,
@@ -244,6 +305,7 @@ export async function executeAlbumDownload({
     const stagingRoot = path.join(libraryStagingRoot, 'staging');
     const trackTempRoot = path.join(albumTempRoot, 'tracks-temp');
     let albumResult = null;
+    let preserveLibraryStaging = false;
 
     try {
         albumResult = await resolver.resolveAlbum(id, { album, tracks });
@@ -251,8 +313,21 @@ export async function executeAlbumDownload({
         const albumRelativePath = buildAlbumRelativePath(resolvedAlbum);
         const finalAlbumDir = path.resolve(config.downloadRoot, albumRelativePath);
         const stagingAlbumDir = path.resolve(stagingRoot, albumRelativePath);
+        const resolvedCache = new Map();
+        const finalAlbumExists = await pathExists(finalAlbumDir, fsOps);
 
-        if (skipExistingComplete && (await isExistingAlbumComplete(finalAlbumDir, albumResult.tracks.length, fsOps))) {
+        if (
+            finalAlbumExists &&
+            (await isExpectedAlbumComplete({
+                albumResult,
+                quality,
+                resolver,
+                resolvedCache,
+                downloadRoot: config.downloadRoot,
+                albumRelativePath,
+                fsOps,
+            }))
+        ) {
             return {
                 success: true,
                 jobId,
@@ -260,14 +335,23 @@ export async function executeAlbumDownload({
                 action: 'skipped-existing-complete',
                 finalAlbumDir,
                 relativePath: albumRelativePath,
+                warnings: [],
             };
         }
 
-        // Keep completed staged tracks across abrupt server restarts. Only
-        // staging that existed before this execution counts as resumable;
-        // tracks written earlier in the current run must not trigger recovery
-        // logic for later tracks.
-        const resumeExistingStaging = await pathExists(stagingAlbumDir, fsOps);
+        const currentStagingExisted = await pathExists(stagingAlbumDir, fsOps);
+        const previousStagingRoots = await listPreviousStagingRoots(config.downloadRoot, jobId, fsOps);
+        const reusablePreviousStagingRoots = [];
+        for (const root of previousStagingRoots) {
+            if (await pathExists(path.resolve(root, albumRelativePath), fsOps)) {
+                reusablePreviousStagingRoots.push(root);
+            }
+        }
+        const candidateSources = [
+            ...(finalAlbumExists ? [{ root: config.downloadRoot, action: 'reused-final-track' }] : []),
+            ...reusablePreviousStagingRoots.map((root) => ({ root, action: 'reused-staged-track' })),
+        ];
+
         await fsOps.mkdir(stagingAlbumDir, { recursive: true });
         onProgress?.({ phase: 'processing', totalTracks: albumResult.tracks.length, completedTracks: 0 });
 
@@ -284,16 +368,17 @@ export async function executeAlbumDownload({
 
             let result;
             try {
-                const resumable = resumeExistingStaging
-                    ? await resolveReusableStagedTrack({
-                          track,
-                          quality,
-                          resolver,
-                          stagingRoot,
-                          albumRelativePath,
-                          fsOps,
-                      })
-                    : { resolved: null, result: null };
+                const resumable = await resolveReusableTrack({
+                    track,
+                    quality,
+                    resolver,
+                    resolvedCache,
+                    stagingRoot,
+                    albumRelativePath,
+                    candidateSources,
+                    checkCurrentStaging: currentStagingExisted,
+                    fsOps,
+                });
 
                 result =
                     resumable.result ||
@@ -404,6 +489,7 @@ export async function executeAlbumDownload({
             ...publication,
         };
     } catch (error) {
+        preserveLibraryStaging = true;
         if (!error.failureCode) error.failureCode = 'ALBUM_DOWNLOAD_FAILED';
         onProgress?.({
             phase: 'failed',
@@ -414,6 +500,8 @@ export async function executeAlbumDownload({
         throw error;
     } finally {
         await fsOps.rm(albumTempRoot, { recursive: true, force: true }).catch(() => {});
-        await fsOps.rm(libraryStagingRoot, { recursive: true, force: true }).catch(() => {});
+        if (!preserveLibraryStaging) {
+            await fsOps.rm(libraryStagingRoot, { recursive: true, force: true }).catch(() => {});
+        }
     }
 }
