@@ -115,15 +115,22 @@ async function resolveReusableTrack({
     stagingRoot,
     albumRelativePath,
     candidateSources = [],
+    checkCurrentStaging = false,
     fsOps = fs,
 } = {}) {
+    if (!checkCurrentStaging && candidateSources.length === 0) {
+        return { resolved: null, result: null };
+    }
+
     const resolved = await resolveTrackOnce(track, quality, resolver, resolvedCache);
 
-    const current = await findExistingTrackFile(resolved, {
-        root: stagingRoot,
-        relativeDirectory: albumRelativePath,
-        fsOps,
-    });
+    const current = checkCurrentStaging
+        ? await findExistingTrackFile(resolved, {
+              root: stagingRoot,
+              relativeDirectory: albumRelativePath,
+              fsOps,
+          })
+        : null;
     if (current) {
         return {
             resolved,
@@ -286,9 +293,11 @@ export async function executeAlbumDownload({
         const finalAlbumDir = path.resolve(config.downloadRoot, albumRelativePath);
         const stagingAlbumDir = path.resolve(stagingRoot, albumRelativePath);
         const resolvedCache = new Map();
+        const finalAlbumExists = await pathExists(finalAlbumDir, fsOps);
 
         if (
-            await isExpectedAlbumComplete({
+            finalAlbumExists &&
+            (await isExpectedAlbumComplete({
                 albumResult,
                 quality,
                 resolver,
@@ -296,7 +305,7 @@ export async function executeAlbumDownload({
                 downloadRoot: config.downloadRoot,
                 albumRelativePath,
                 fsOps,
-            })
+            }))
         ) {
             return {
                 success: true,
@@ -309,10 +318,17 @@ export async function executeAlbumDownload({
             };
         }
 
+        const currentStagingExisted = await pathExists(stagingAlbumDir, fsOps);
         const previousStagingRoots = await listPreviousStagingRoots(config.downloadRoot, jobId, fsOps);
+        const reusablePreviousStagingRoots = [];
+        for (const root of previousStagingRoots) {
+            if (await pathExists(path.resolve(root, albumRelativePath), fsOps)) {
+                reusablePreviousStagingRoots.push(root);
+            }
+        }
         const candidateSources = [
-            { root: config.downloadRoot, action: 'reused-final-track' },
-            ...previousStagingRoots.map((root) => ({ root, action: 'reused-staged-track' })),
+            ...(finalAlbumExists ? [{ root: config.downloadRoot, action: 'reused-final-track' }] : []),
+            ...reusablePreviousStagingRoots.map((root) => ({ root, action: 'reused-staged-track' })),
         ];
 
         await fsOps.mkdir(stagingAlbumDir, { recursive: true });
@@ -339,6 +355,7 @@ export async function executeAlbumDownload({
                     stagingRoot,
                     albumRelativePath,
                     candidateSources,
+                    checkCurrentStaging: currentStagingExisted,
                     fsOps,
                 });
 
