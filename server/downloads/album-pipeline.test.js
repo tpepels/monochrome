@@ -287,6 +287,8 @@ test('reuses validated staged tracks after an interrupted album download', async
             {
                 id: 't1',
                 quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t1.wav',
+                mediaMimeType: 'audio/wav',
                 duration: 2,
                 metadata: {
                     id: 't1',
@@ -302,6 +304,8 @@ test('reuses validated staged tracks after an interrupted album download', async
             {
                 id: 't2',
                 quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t2.wav',
+                mediaMimeType: 'audio/wav',
                 duration: 2,
                 metadata: {
                     id: 't2',
@@ -490,7 +494,7 @@ test('restores existing album if publication fails after backup creation', async
     await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('cancellation during staging removes staging and never publishes final album', async () => {
+test('cancellation during staging preserves staging for resume and never publishes final album', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
         downloadRoot: path.join(root, 'music'),
@@ -521,9 +525,7 @@ test('cancellation during staging removes staging and never publishes final albu
         code: 'ENOENT',
     });
     await expect(fs.stat(path.join(config.tempRoot, 'job-cancel'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-cancel'))).rejects.toMatchObject({
-        code: 'ENOENT',
-    });
+    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-cancel'))).resolves.toBeTruthy();
 });
 
 test('cancellation during publication restores the previous album without a mixed directory', async () => {
@@ -565,28 +567,116 @@ test('cancellation during publication restores the previous album without a mixe
     await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('can skip a complete existing album before staging', async () => {
+test('reuses valid tracks from a partial final album instead of downloading them again', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
         downloadRoot: path.join(root, 'music'),
     };
     const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
     await fs.mkdir(finalAlbumDir, { recursive: true });
-    await fs.writeFile(path.join(finalAlbumDir, 'one.wav'), 'one');
-    await fs.writeFile(path.join(finalAlbumDir, 'two.wav'), 'two');
+    await fs.writeFile(path.join(finalAlbumDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    const executed = [];
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        executed.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-partial-final',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(executed).toEqual(['t2']);
+    expect(result.tracks[0].action).toBe('reused-final-track');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+});
+
+test('reuses valid tracks from a previous failed job staging directory', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const previousStagingDir = path.join(
+        config.downloadRoot,
+        '.monochrome-staging',
+        'old-failed-job',
+        'staging',
+        'Album Artist',
+        'Album Title'
+    );
+    await fs.mkdir(previousStagingDir, { recursive: true });
+    await fs.writeFile(path.join(previousStagingDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    const executed = [];
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        executed.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'new-retry-job',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(executed).toEqual(['t2']);
+    expect(result.tracks[0].action).toBe('reused-staged-track');
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
+    ).resolves.toBeTruthy();
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav'))
+    ).resolves.toBeTruthy();
+});
+
+test('skips a complete existing album only when every expected track validates', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    await fs.mkdir(finalAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(finalAlbumDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+    await fs.writeFile(path.join(finalAlbumDir, '02 - Two.wav'), wavBuffer({ durationSeconds: 2 }));
 
     let trackExecutorCalled = false;
     const result = await executeAlbumDownload({
         id: 'album1',
         jobId: 'job-skip',
         config,
-        resolver: resolverFor(albumResult()),
+        resolver: albumResolverWithTrackMetadataMismatch(),
         trackExecutor: async () => {
             trackExecutorCalled = true;
         },
         fetchImpl: coverFetch(),
         publishLock: new InMemoryPublishLock(),
-        skipExistingComplete: true,
     });
 
     expect(result.action).toBe('skipped-existing-complete');
