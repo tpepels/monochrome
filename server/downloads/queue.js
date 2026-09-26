@@ -261,6 +261,8 @@ function createJob(payload, overrides = {}) {
         completedAt: null,
         cancelledAt: null,
         cancelReason: null,
+        requeuedAsJobId: null,
+        requeuedAt: null,
         attempts: overrides.attempts || 0,
     };
 }
@@ -484,30 +486,42 @@ export class MemoryDownloadQueue {
             return null;
         }
 
-        return this.enqueue(jobPayload(existing), config);
+        const retried = await this.enqueue(jobPayload(existing), config);
+        existing.requeuedAsJobId = retried.jobId;
+        existing.requeuedAt = nowIso();
+        await this.persistJob(existing);
+        return retried;
     }
 
     async requeueAll(status, config = this.lastConfig) {
         const matching = this.order
             .map((jobId) => this.jobs.get(jobId))
-            .filter((job) => job?.status === status);
+            .filter((job) => job?.status === status && !job.requeuedAsJobId);
 
-        const unique = new Map();
+        const groups = new Map();
         for (const job of matching) {
             const key = [job.type, job.id, job.quality].join('\u0000');
-            if (!unique.has(key)) unique.set(key, job);
+            const group = groups.get(key) || [];
+            group.push(job);
+            groups.set(key, group);
         }
 
         const jobs = [];
-        for (const job of unique.values()) {
-            jobs.push(await this.enqueue(jobPayload(job), config));
+        for (const group of groups.values()) {
+            const requeued = await this.enqueue(jobPayload(group[0]), config);
+            jobs.push(requeued);
+            for (const source of group) {
+                source.requeuedAsJobId = requeued.jobId;
+                source.requeuedAt = nowIso();
+                await this.persistJob(source);
+            }
         }
 
         return {
             success: true,
             sourceStatus: status,
             matched: matching.length,
-            unique: unique.size,
+            unique: groups.size,
             jobs,
         };
     }
