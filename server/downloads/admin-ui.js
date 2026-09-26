@@ -433,23 +433,25 @@ async function runBulkAction(kind) {
 
     const isRetry = kind === 'retry-failed';
     const button = document.getElementById(kind);
+    let finalMessage = null;
+    let finalMessageIsError = false;
     busy = true;
     button.disabled = true;
     setMessage(isRetry ? 'Retrying failed downloads…' : 'Resuming cancelled downloads…');
 
     try {
         const result = await api('/api/downloads/' + kind, { method:'POST' });
-        setMessage(
+        finalMessage =
             (isRetry ? 'Retry requested for ' : 'Resume requested for ') +
             result.unique + ' unique download(s)' +
-            (result.matched !== result.unique ? ' from ' + result.matched + ' matching jobs.' : '.')
-        );
-        await refresh();
+            (result.matched !== result.unique ? ' from ' + result.matched + ' matching jobs.' : '.');
     } catch (error) {
-        setMessage(error.message, true);
+        finalMessage = error.message;
+        finalMessageIsError = true;
     } finally {
         busy = false;
-        button.disabled = false;
+        await refresh();
+        if (finalMessage) setMessage(finalMessage, finalMessageIsError);
     }
 }
 
