@@ -849,16 +849,25 @@ export class MemoryDownloadQueue {
         const transferPercent =
             totalBytes > 0 ? Math.max(0, Math.min(99, Math.round((downloadedBytes / totalBytes) * 100))) : null;
 
+        const retryWaitSeconds = Number(transfer.retryWaitSeconds || 0);
         job.progress = {
             ...job.progress,
             percent: transferPercent ?? job.progress.percent ?? 1,
-            message: 'Downloading track',
+            message:
+                retryWaitSeconds > 0
+                    ? `Retrying track in ${retryWaitSeconds}s`
+                    : 'Downloading track',
             phase: 'processing',
             downloadedBytes,
             totalBytes: totalBytes || null,
             transferPercent,
             segmentIndex: Number.isFinite(Number(transfer.segmentIndex)) ? Number(transfer.segmentIndex) : null,
             segmentCount: Number.isFinite(Number(transfer.segmentCount)) ? Number(transfer.segmentCount) : null,
+            retryWaitMs: Number(transfer.retryWaitMs || 0) || null,
+            retryWaitSeconds: retryWaitSeconds || null,
+            retryAttempt: Number(transfer.retryAttempt || 0) || null,
+            retryStatus: Number(transfer.retryStatus || 0) || null,
+            retryAfter: transfer.retryAfter || null,
         };
         job.updatedAt = timestamp;
         this.persistJob(job).catch(() => {});
