@@ -242,6 +242,29 @@ function jobPayload(job) {
     };
 }
 
+function queueReferenceKey(job) {
+    return [job.type, job.id, job.quality].join('\u0000');
+}
+
+function updatedAtMs(job) {
+    const value = Date.parse(job.updatedAt || job.createdAt || '');
+    return Number.isFinite(value) ? value : 0;
+}
+
+function pickCanonicalJob(group) {
+    const active = group.filter((job) => !TERMINAL_STATUSES.has(job.status));
+    if (active.length) {
+        return active.sort((a, b) => updatedAtMs(b) - updatedAtMs(a))[0];
+    }
+
+    const completed = group.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.COMPLETED);
+    if (completed.length) {
+        return completed.sort((a, b) => updatedAtMs(b) - updatedAtMs(a))[0];
+    }
+
+    return [...group].sort((a, b) => updatedAtMs(b) - updatedAtMs(a))[0] || null;
+}
+
 function createJob(payload, overrides = {}) {
     const timestamp = nowIso();
     return {
@@ -314,6 +337,45 @@ export class MemoryDownloadQueue {
         this.persistChain = Promise.resolve();
     }
 
+    async deletePersistedJobs() {
+        // Memory persistence serializes only jobs still present in this.order.
+    }
+
+    async compactDuplicates() {
+        const groups = new Map();
+        for (const jobId of this.order) {
+            const job = this.jobs.get(jobId);
+            if (!job) continue;
+            const key = queueReferenceKey(job);
+            const group = groups.get(key) || [];
+            group.push(job);
+            groups.set(key, group);
+        }
+
+        const keepIds = new Set();
+        const removeIds = [];
+        for (const group of groups.values()) {
+            const keep = pickCanonicalJob(group);
+            if (!keep) continue;
+            keepIds.add(keep.jobId);
+
+            for (const job of group) {
+                if (job.jobId === keep.jobId) continue;
+                this.activeControllers.get(job.jobId)?.abort();
+                removeIds.push(job.jobId);
+            }
+        }
+
+        if (!removeIds.length) return { removed: 0 };
+
+        this.order = this.order.filter((jobId) => keepIds.has(jobId) || !removeIds.includes(jobId));
+        for (const jobId of removeIds) this.jobs.delete(jobId);
+
+        await this.deletePersistedJobs(removeIds);
+        await this.persistOrder();
+        return { removed: removeIds.length };
+    }
+
     queueStateFile(config = this.lastConfig) {
         if (!config?.tempRoot || this.backend !== 'memory' || !this.persistToDisk) return null;
         return path.join(config.tempRoot, 'download-queue-state.json');
@@ -379,6 +441,7 @@ export class MemoryDownloadQueue {
     async recover(config = this.lastConfig) {
         this.lastConfig = config;
         await this.hydrateFromDisk(config);
+        await this.compactDuplicates();
 
         const timestamp = nowIso();
         let changed = false;
@@ -412,6 +475,7 @@ export class MemoryDownloadQueue {
 
     async enqueue(input, config = this.lastConfig) {
         this.lastConfig = config;
+        await this.compactDuplicates();
         const payload = normalizePayload(input);
 
         const existingActiveJob = this.order
@@ -482,48 +546,79 @@ export class MemoryDownloadQueue {
         return summarizeJob(job);
     }
 
+    resetJobForRetry(job, message = 'Queued for retry') {
+        const timestamp = nowIso();
+        job.status = DOWNLOAD_JOB_STATUSES.QUEUED;
+        job.progress = baseProgress(message);
+        job.trackProgress = job.type === 'album' ? [] : null;
+        job.publicationPhase = null;
+        job.result = null;
+        job.error = null;
+        job.failureCode = null;
+        job.diagnostics = null;
+        job.retryable = false;
+        job.startedAt = null;
+        job.completedAt = null;
+        job.cancelledAt = null;
+        job.cancelReason = null;
+        job.requeuedAsJobId = null;
+        job.requeuedAt = null;
+        job.restartRequested = false;
+        job.updatedAt = timestamp;
+    }
+
+    async requeueInPlace(job, config = this.lastConfig, message = 'Queued for retry') {
+        if (!job || !TERMINAL_STATUSES.has(job.status)) return job ? summarizeJob(job) : null;
+
+        if (this.activeControllers.has(job.jobId)) {
+            job.restartRequested = true;
+            job.progress = {
+                ...(job.progress || {}),
+                message: 'Restart requested; waiting for current worker to stop',
+            };
+            job.updatedAt = nowIso();
+            await this.persistJob(job);
+            return summarizeJob(job);
+        }
+
+        this.resetJobForRetry(job, message);
+        await this.persistJob(job);
+        this.schedule(config);
+        return summarizeJob(job);
+    }
+
     async retry(jobId, config = this.lastConfig) {
+        await this.compactDuplicates();
         const existing = this.jobs.get(jobId);
         if (!existing || existing.status !== DOWNLOAD_JOB_STATUSES.FAILED || !existing.retryable) {
             return null;
         }
 
-        const retried = await this.enqueue(jobPayload(existing), config);
-        existing.requeuedAsJobId = retried.jobId;
-        existing.requeuedAt = nowIso();
-        await this.persistJob(existing);
-        return retried;
+        return this.requeueInPlace(existing, config, 'Queued for retry');
     }
 
     async requeueAll(status, config = this.lastConfig) {
+        await this.compactDuplicates();
         const matching = this.order
             .map((jobId) => this.jobs.get(jobId))
-            .filter((job) => job?.status === status && !job.requeuedAsJobId);
-
-        const groups = new Map();
-        for (const job of matching) {
-            const key = [job.type, job.id, job.quality].join('\u0000');
-            const group = groups.get(key) || [];
-            group.push(job);
-            groups.set(key, group);
-        }
+            .filter((job) => job?.status === status && !job.restartRequested);
 
         const jobs = [];
-        for (const group of groups.values()) {
-            const requeued = await this.enqueue(jobPayload(group[0]), config);
-            jobs.push(requeued);
-            for (const source of group) {
-                source.requeuedAsJobId = requeued.jobId;
-                source.requeuedAt = nowIso();
-                await this.persistJob(source);
-            }
+        for (const job of matching) {
+            jobs.push(
+                await this.requeueInPlace(
+                    job,
+                    config,
+                    status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry'
+                )
+            );
         }
 
         return {
             success: true,
             sourceStatus: status,
             matched: matching.length,
-            unique: groups.size,
+            unique: matching.length,
             jobs,
         };
     }
@@ -536,8 +631,9 @@ export class MemoryDownloadQueue {
         return this.requeueAll(DOWNLOAD_JOB_STATUSES.CANCELLED, config);
     }
 
-    snapshot(config = this.lastConfig) {
+    async snapshot(config = this.lastConfig) {
         this.lastConfig = config;
+        await this.compactDuplicates();
         this.ensureStartupSweep(config);
         this.applyWorkerConfig(config);
         const jobs = this.order.map((jobId) => summarizeJob(this.jobs.get(jobId))).filter(Boolean);
@@ -551,8 +647,8 @@ export class MemoryDownloadQueue {
         }
 
         const recoverable = {
-            failed: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.FAILED && !job.requeuedAsJobId).length,
-            cancelled: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.CANCELLED && !job.requeuedAsJobId).length,
+            failed: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.FAILED && !job.restartRequested).length,
+            cancelled: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.CANCELLED && !job.restartRequested).length,
         };
 
         return {
@@ -648,9 +744,18 @@ export class MemoryDownloadQueue {
         this.persistJob(job).catch(() => {});
 
         queueMicrotask(() => {
-            this.runJob(job, config, controller).finally(() => {
+            this.runJob(job, config, controller).finally(async () => {
                 this.activeWorkers -= 1;
                 this.activeControllers.delete(job.jobId);
+
+                if (job.restartRequested && TERMINAL_STATUSES.has(job.status)) {
+                    this.resetJobForRetry(
+                        job,
+                        job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry'
+                    );
+                    await this.persistJob(job);
+                }
+
                 this.schedule(config);
                 this.resolveIdleIfNeeded();
             });
@@ -955,6 +1060,12 @@ export class RedisDownloadQueue extends MemoryDownloadQueue {
 
     async persistJob(job) {
         await this.client.hSet(this.jobsKey, job.jobId, JSON.stringify(job));
+    }
+
+    async deletePersistedJobs(jobIds) {
+        for (const jobId of jobIds) {
+            await this.client.hDel(this.jobsKey, jobId);
+        }
     }
 
     async persistOrder() {
