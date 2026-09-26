@@ -257,6 +257,7 @@ describe('server download API', () => {
             error.maxTransferAttempts = 3;
             error.segmentIndex = 0;
             error.segmentCount = 1;
+            error.cause = Object.assign(new Error('socket closed by peer'), { code: 'ECONNRESET' });
             throw error;
         };
 
@@ -290,6 +291,8 @@ describe('server download API', () => {
                     maxTransferAttempts: 3,
                     segmentIndex: 0,
                     segmentCount: 1,
+                    causeCode: 'ECONNRESET',
+                    causeMessage: 'socket closed by peer',
                 },
                 state: {
                     jobId: queued.jobId,
@@ -383,6 +386,21 @@ describe('server download API', () => {
             id: 'cancelled-album',
             status: 'queued',
         });
+
+        const snapshot = await downloadQueue.snapshot(config);
+        expect(snapshot.recoverable).toEqual({ failed: 0, cancelled: 0 });
+
+        const secondRetry = await onRetryFailedRequest(
+            context(new Request('https://example.test/api/downloads/retry-failed', { method: 'POST' }))
+        );
+        const secondRetryBody = await secondRetry.json();
+        expect(secondRetryBody).toMatchObject({ matched: 0, unique: 0 });
+
+        const secondResume = await onResumeCancelledRequest(
+            context(new Request('https://example.test/api/downloads/resume-cancelled', { method: 'POST' }))
+        );
+        const secondResumeBody = await secondResume.json();
+        expect(secondResumeBody).toMatchObject({ matched: 0, unique: 0 });
     });
 
     test('retries a retryable failed job through the API', async () => {
