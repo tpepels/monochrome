@@ -433,7 +433,7 @@ test('forces track files into the album metadata directory even when track metad
     });
 });
 
-test('one failed track fails the album and leaves no final album directory', async () => {
+test('one failed track preserves staging and leaves no final album directory', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
         downloadRoot: path.join(root, 'music'),
@@ -454,6 +454,9 @@ test('one failed track fails the album and leaves no final album directory', asy
 
     await expect(fs.stat(finalAlbumDir)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(path.join(config.tempRoot, 'job-fail'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+        fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-fail'))
+    ).resolves.toBeTruthy();
 });
 
 test('restores existing album if publication fails after backup creation', async () => {
