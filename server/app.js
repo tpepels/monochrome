@@ -4,6 +4,8 @@ import { onRequest as downloadJobRequest } from '../functions/api/downloads/[job
 import { onRequest as cancelDownloadRequest } from '../functions/api/downloads/[jobId]/cancel.js';
 import { onRequest as retryDownloadRequest } from '../functions/api/downloads/[jobId]/retry.js';
 import { onRequest as resetDownloadsRequest } from '../functions/api/downloads/reset.js';
+import { onRequest as retryFailedDownloadsRequest } from '../functions/api/downloads/retry-failed.js';
+import { onRequest as resumeCancelledDownloadsRequest } from '../functions/api/downloads/resume-cancelled.js';
 import { onRequest as sweepDownloadsRequest } from '../functions/api/downloads/maintenance/sweep.js';
 import { downloadAdminResponse } from './downloads/admin-ui.js';
 import { getDownloadsConfig } from './downloads/config.js';
@@ -66,6 +68,8 @@ async function handleApi(request) {
 
     if (url.pathname === '/api/downloads') return downloadsRequest(context);
     if (url.pathname === '/api/downloads/reset') return resetDownloadsRequest(context);
+    if (url.pathname === '/api/downloads/retry-failed') return retryFailedDownloadsRequest(context);
+    if (url.pathname === '/api/downloads/resume-cancelled') return resumeCancelledDownloadsRequest(context);
     if (url.pathname === '/api/downloads/maintenance/sweep') return sweepDownloadsRequest(context);
 
     if (parts.length === 3 && parts[0] === 'api' && parts[1] === 'downloads') {
