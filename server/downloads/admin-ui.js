@@ -97,6 +97,8 @@ button:disabled { opacity:.45; cursor:default; }
     <div class="actions">
         <a class="button" href="/">Monochrome</a>
         <button id="refresh">Refresh</button>
+        <button id="retry-failed" disabled>Retry all failed</button>
+        <button id="resume-cancelled" disabled>Resume all cancelled</button>
         <button id="reset">Clear queue</button>
         <button id="hard-reset" class="danger">Clear + cleanup</button>
     </div>
@@ -196,6 +198,10 @@ function renderError(job) {
             diagnosticRow('Cloudflare ray', error.cfRay, true),
             diagnosticRow('Retry-After', error.retryAfter),
             diagnosticRow('Provider', error.provider),
+            diagnosticRow('Error code', error.errorCode, true),
+            diagnosticRow('Cause', error.causeName),
+            diagnosticRow('Cause code', error.causeCode, true),
+            diagnosticRow('Cause message', error.causeMessage),
             diagnosticRow('Transfer attempt', error.transferAttempt && (error.transferAttempt + (error.maxTransferAttempts ? ' / ' + error.maxTransferAttempts : ''))),
             diagnosticRow('Segment', segment),
             diagnosticRow('Job ID', state.jobId || job.jobId, true),
@@ -284,6 +290,9 @@ function renderSummary(data) {
     document.getElementById('summary').innerHTML = values.map(function (item) {
         return '<div class="metric"><strong>' + item[1] + '</strong><span>' + item[0] + '</span></div>';
     }).join('');
+
+    document.getElementById('retry-failed').disabled = busy || !(counts.failed > 0);
+    document.getElementById('resume-cancelled').disabled = busy || !(counts.cancelled > 0);
 
     const worker = data.worker || {};
     document.getElementById('worker').innerHTML =
@@ -418,6 +427,31 @@ async function runJobAction(button, action) {
     }
 }
 
+async function runBulkAction(kind) {
+    if (busy) return;
+
+    const isRetry = kind === 'retry-failed';
+    const button = document.getElementById(kind);
+    busy = true;
+    button.disabled = true;
+    setMessage(isRetry ? 'Retrying failed downloads…' : 'Resuming cancelled downloads…');
+
+    try {
+        const result = await api('/api/downloads/' + kind, { method:'POST' });
+        setMessage(
+            (isRetry ? 'Retry requested for ' : 'Resume requested for ') +
+            result.unique + ' unique download(s)' +
+            (result.matched !== result.unique ? ' from ' + result.matched + ' matching jobs.' : '.')
+        );
+        await refresh();
+    } catch (error) {
+        setMessage(error.message, true);
+    } finally {
+        busy = false;
+        button.disabled = false;
+    }
+}
+
 async function resetQueue(cleanup) {
     if (busy) return;
 
@@ -445,6 +479,8 @@ async function resetQueue(cleanup) {
 }
 
 document.getElementById('refresh').addEventListener('click', refresh);
+document.getElementById('retry-failed').addEventListener('click', function () { runBulkAction('retry-failed'); });
+document.getElementById('resume-cancelled').addEventListener('click', function () { runBulkAction('resume-cancelled'); });
 document.getElementById('reset').addEventListener('click', function () { resetQueue(false); });
 document.getElementById('hard-reset').addEventListener('click', function () { resetQueue(true); });
 
