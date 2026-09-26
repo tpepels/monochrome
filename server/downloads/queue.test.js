@@ -108,6 +108,41 @@ describe('server download API', () => {
         }
     });
 
+    test('shows server-directed retry waits for album track transfers', async () => {
+        const config = getDownloadsConfig(context({}).env);
+        const queued = await downloadQueue.enqueue(
+            { type: 'album', id: 'retry-after-album', quality: 'HI_RES_LOSSLESS' },
+            config
+        );
+        const internal = downloadQueue.memoryQueue.jobs.get(queued.jobId);
+        internal.status = 'processing';
+
+        downloadQueue.memoryQueue.updateAlbumProgress(internal, {
+            phase: 'processing',
+            currentTrack: 'track-1',
+            totalTracks: 12,
+            completedTracks: 0,
+            trackTransfer: {
+                retryWaitMs: 60_000,
+                retryWaitSeconds: 60,
+                retryAttempt: 2,
+                retryStatus: 502,
+                retryAfter: '60',
+            },
+        });
+
+        expect(downloadQueue.memoryQueue.get(queued.jobId).progress).toMatchObject({
+            message: 'Retrying current track in 60s',
+            currentTrack: 'track-1',
+            trackTransfer: {
+                retryWaitSeconds: 60,
+                retryAttempt: 2,
+                retryStatus: 502,
+                retryAfter: '60',
+            },
+        });
+    });
+
     test('requeues interrupted jobs during recovery', async () => {
         const config = getDownloadsConfig(context({}).env);
         const job = await downloadQueue.enqueue({ type: 'album', id: 'resume-album', quality: 'LOSSLESS' }, config);
