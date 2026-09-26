@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { executeTrackDownload } from './track-pipeline.js';
+import { executeTrackDownload, parseRetryAfterMs } from './track-pipeline.js';
 
 let root;
 
@@ -193,6 +193,13 @@ test('retries a transient socket reset before response headers', async () => {
     expect(await fs.readFile(result.finalFile)).toEqual(audio);
 });
 
+test('parses Retry-After seconds and HTTP dates with a bounded wait', () => {
+    expect(parseRetryAfterMs('60', 0)).toBe(60_000);
+    expect(parseRetryAfterMs('600', 0)).toBe(120_000);
+    expect(parseRetryAfterMs('Thu, 01 Jan 1970 00:01:00 GMT', 0)).toBe(60_000);
+    expect(parseRetryAfterMs('invalid', 0)).toBeNull();
+});
+
 test('retries transient Cloudflare 520 responses', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     let fetchCalls = 0;
@@ -212,7 +219,7 @@ test('retries transient Cloudflare 520 responses', async () => {
                     status: 520,
                     headers: {
                         'cf-ray': 'test-ray',
-                        'retry-after': '60',
+                        'retry-after': '0',
                     },
                 });
             }

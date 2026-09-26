@@ -849,16 +849,25 @@ export class MemoryDownloadQueue {
         const transferPercent =
             totalBytes > 0 ? Math.max(0, Math.min(99, Math.round((downloadedBytes / totalBytes) * 100))) : null;
 
+        const retryWaitSeconds = Number(transfer.retryWaitSeconds || 0);
         job.progress = {
             ...job.progress,
             percent: transferPercent ?? job.progress.percent ?? 1,
-            message: 'Downloading track',
+            message:
+                retryWaitSeconds > 0
+                    ? `Retrying track in ${retryWaitSeconds}s`
+                    : 'Downloading track',
             phase: 'processing',
             downloadedBytes,
             totalBytes: totalBytes || null,
             transferPercent,
             segmentIndex: Number.isFinite(Number(transfer.segmentIndex)) ? Number(transfer.segmentIndex) : null,
             segmentCount: Number.isFinite(Number(transfer.segmentCount)) ? Number(transfer.segmentCount) : null,
+            retryWaitMs: Number(transfer.retryWaitMs || 0) || null,
+            retryWaitSeconds: retryWaitSeconds || null,
+            retryAttempt: Number(transfer.retryAttempt || 0) || null,
+            retryStatus: Number(transfer.retryStatus || 0) || null,
+            retryAfter: transfer.retryAfter || null,
         };
         job.updatedAt = timestamp;
         this.persistJob(job).catch(() => {});
@@ -878,10 +887,16 @@ export class MemoryDownloadQueue {
                 ? Math.min(99, Math.round(((completedTracks + currentTrackFraction) / totalTracks) * 90))
                 : 1;
         job.publicationPhase = event.phase || job.publicationPhase;
+        const retryWaitSeconds = Number(event.trackTransfer?.retryWaitSeconds || 0);
         job.progress = {
             ...job.progress,
             percent: event.phase === 'publishing' ? 95 : percent,
-            message: event.phase === 'publishing' ? 'Publishing album' : 'Processing album',
+            message:
+                event.phase === 'publishing'
+                    ? 'Publishing album'
+                    : retryWaitSeconds > 0
+                      ? `Retrying current track in ${retryWaitSeconds}s`
+                      : 'Processing album',
             phase: event.phase,
             totalTracks,
             completedTracks,
