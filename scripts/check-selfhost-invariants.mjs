@@ -222,6 +222,18 @@ if (failures.length === 0) {
         "url.pathname === '/api/downloads/reset'",
         'download reset API route was removed'
     );
+    requireText(
+        appPath,
+        app,
+        "url.pathname === '/api/downloads/retry-failed'",
+        'bulk retry-failed API route was removed from the self-host server'
+    );
+    requireText(
+        appPath,
+        app,
+        "url.pathname === '/api/downloads/resume-cancelled'",
+        'bulk resume-cancelled API route was removed from the self-host server'
+    );
     requireText(adminPath, admin, 'Server downloads', 'standalone download admin UI no longer looks intact');
     requireText(
         contractPath,
