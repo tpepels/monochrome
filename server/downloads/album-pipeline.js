@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getDownloadsConfig } from './config.js';
 import { InMemoryMaintenanceLock } from './maintenance.js';
 import { createResolverAdapter } from './resolver-adapter.js';
-import { executeTrackDownload, findExistingTrackFile } from './track-pipeline.js';
+import { buildTrackFileName, executeTrackDownload, findExistingTrackFile } from './track-pipeline.js';
 import { LIBRARY_STAGING_DIR } from './constants.js';
 
 const COVER_HEADERS = Object.freeze({
@@ -78,6 +78,17 @@ async function listPreviousStagingRoots(downloadRoot, currentJobId, fsOps = fs) 
         .map((entry) => path.join(stagingBase, entry.name, 'staging'));
 }
 
+const REUSABLE_AUDIO_EXTENSIONS = ['flac', 'm4a', 'mp4', 'mp3', 'ogg', 'wav'];
+
+async function hasPotentialTrackFile(root, albumRelativePath, track, fsOps = fs) {
+    if (!root) return false;
+    for (const extension of REUSABLE_AUDIO_EXTENSIONS) {
+        const candidate = path.resolve(root, albumRelativePath, buildTrackFileName(track, extension));
+        if (await pathExists(candidate, fsOps)) return true;
+    }
+    return false;
+}
+
 async function resolveTrackOnce(track, quality, resolver, cache) {
     const key = String(track.id);
     if (cache.has(key)) return cache.get(key);
@@ -96,6 +107,7 @@ async function isExpectedAlbumComplete({
     fsOps = fs,
 } = {}) {
     for (const track of albumResult.tracks) {
+        if (!(await hasPotentialTrackFile(downloadRoot, albumRelativePath, track, fsOps))) return false;
         const resolved = await resolveTrackOnce(track, quality, resolver, resolvedCache);
         const existing = await findExistingTrackFile(resolved, {
             root: downloadRoot,
@@ -118,13 +130,22 @@ async function resolveReusableTrack({
     checkCurrentStaging = false,
     fsOps = fs,
 } = {}) {
-    if (!checkCurrentStaging && candidateSources.length === 0) {
+    const currentHasPotential =
+        checkCurrentStaging && (await hasPotentialTrackFile(stagingRoot, albumRelativePath, track, fsOps));
+    const matchingSources = [];
+    for (const source of matchingSources) {
+        if (await hasPotentialTrackFile(source.root, albumRelativePath, track, fsOps)) {
+            matchingSources.push(source);
+        }
+    }
+
+    if (!currentHasPotential && matchingSources.length === 0) {
         return { resolved: null, result: null };
     }
 
     const resolved = await resolveTrackOnce(track, quality, resolver, resolvedCache);
 
-    const current = checkCurrentStaging
+    const current = currentHasPotential
         ? await findExistingTrackFile(resolved, {
               root: stagingRoot,
               relativeDirectory: albumRelativePath,
