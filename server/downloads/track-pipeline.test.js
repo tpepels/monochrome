@@ -131,6 +131,36 @@ test('streams audio responses without reading the response arrayBuffer', async (
     expect(response.arrayBuffer).not.toHaveBeenCalled();
 });
 
+test('retries an unexpected fetch AbortError instead of treating it as cancellation', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-unexpected-abort',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                throw new DOMException('fetch aborted internally', 'AbortError');
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        name: 'AbortError',
+        failureCode: 'CDN_FETCH_FAILED',
+        transferAttempt: 3,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+
+    expect(fetchCalls).toBe(3);
+});
+
 test('retries a transient socket reset before response headers', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     const calls = [];

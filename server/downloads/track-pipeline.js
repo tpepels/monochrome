@@ -321,7 +321,8 @@ function headersForAudioUrl() {
 }
 
 function isRetryableTransferError(error) {
-    if (!error || error?.name === 'AbortError' || error?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') return false;
+    if (!error || error?.failureCode === 'DOWNLOAD_FETCH_TIMEOUT') return false;
+    if (error?.name === 'AbortError') return true;
 
     const status = Number(error?.status);
     if (Number.isFinite(status)) {

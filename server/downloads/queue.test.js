@@ -9,6 +9,8 @@ import { onRequest as onJobRequest } from '../../functions/api/downloads/[jobId]
 import { onRequest as onCancelRequest } from '../../functions/api/downloads/[jobId]/cancel.js';
 import { onRequest as onRetryRequest } from '../../functions/api/downloads/[jobId]/retry.js';
 import { onRequest as onResetRequest } from '../../functions/api/downloads/reset.js';
+import { onRequest as onRetryFailedRequest } from '../../functions/api/downloads/retry-failed.js';
+import { onRequest as onResumeCancelledRequest } from '../../functions/api/downloads/resume-cancelled.js';
 
 function context(request, params = {}) {
     return {
@@ -255,6 +257,7 @@ describe('server download API', () => {
             error.maxTransferAttempts = 3;
             error.segmentIndex = 0;
             error.segmentCount = 1;
+            error.cause = Object.assign(new Error('socket closed by peer'), { code: 'ECONNRESET' });
             throw error;
         };
 
@@ -288,6 +291,8 @@ describe('server download API', () => {
                     maxTransferAttempts: 3,
                     segmentIndex: 0,
                     segmentCount: 1,
+                    causeCode: 'ECONNRESET',
+                    causeMessage: 'socket closed by peer',
                 },
                 state: {
                     jobId: queued.jobId,
@@ -303,6 +308,99 @@ describe('server download API', () => {
         } finally {
             downloadQueue.memoryQueue.trackExecutor = originalExecutor;
         }
+    });
+
+    test('does not classify an unexpected AbortError as a cancellation', async () => {
+        const queue = new MemoryDownloadQueue({
+            persistToDisk: false,
+            trackExecutor: async () => {
+                throw new DOMException('provider aborted unexpectedly', 'AbortError');
+            },
+        });
+        const config = getDownloadsConfig({
+            TEMP_DIR: '/tmp/test-downloads',
+            DOWNLOAD_DIR: '/music',
+            DOWNLOAD_WORKER_ENABLED: 'true',
+        });
+
+        const queued = await queue.enqueue({ type: 'track', id: 'abort-track', quality: 'LOSSLESS' }, config);
+        await queue.waitForIdleForTests();
+
+        expect(queue.get(queued.jobId)).toMatchObject({
+            status: 'failed',
+            failureCode: 'DOWNLOAD_JOB_FAILED',
+            cancelReason: null,
+        });
+    });
+
+    test('bulk retries every failed download and resumes every cancelled download', async () => {
+        const config = getDownloadsConfig(context({}).env);
+        const failed = await downloadQueue.enqueue({ type: 'track', id: 'failed-track', quality: 'LOSSLESS' }, config);
+        const cancelled = await downloadQueue.enqueue(
+            { type: 'album', id: 'cancelled-album', quality: 'HI_RES_LOSSLESS' },
+            config
+        );
+
+        const failedInternal = downloadQueue.memoryQueue.jobs.get(failed.jobId);
+        failedInternal.status = 'failed';
+        failedInternal.failureCode = 'PERMANENT_TEST_FAILURE';
+        failedInternal.retryable = false;
+
+        const cancelledInternal = downloadQueue.memoryQueue.jobs.get(cancelled.jobId);
+        cancelledInternal.status = 'cancelled';
+        cancelledInternal.cancelledAt = new Date().toISOString();
+        cancelledInternal.cancelReason = 'user-requested';
+
+        const retryResponse = await onRetryFailedRequest(
+            context(new Request('https://example.test/api/downloads/retry-failed', { method: 'POST' }))
+        );
+        const retryBody = await retryResponse.json();
+
+        expect(retryResponse.status).toBe(202);
+        expect(retryBody).toMatchObject({
+            success: true,
+            sourceStatus: 'failed',
+            matched: 1,
+            unique: 1,
+        });
+        expect(retryBody.jobs).toHaveLength(1);
+        expect(retryBody.jobs[0]).toMatchObject({
+            id: 'failed-track',
+            status: 'queued',
+        });
+
+        const resumeResponse = await onResumeCancelledRequest(
+            context(new Request('https://example.test/api/downloads/resume-cancelled', { method: 'POST' }))
+        );
+        const resumeBody = await resumeResponse.json();
+
+        expect(resumeResponse.status).toBe(202);
+        expect(resumeBody).toMatchObject({
+            success: true,
+            sourceStatus: 'cancelled',
+            matched: 1,
+            unique: 1,
+        });
+        expect(resumeBody.jobs).toHaveLength(1);
+        expect(resumeBody.jobs[0]).toMatchObject({
+            id: 'cancelled-album',
+            status: 'queued',
+        });
+
+        const snapshot = await downloadQueue.snapshot(config);
+        expect(snapshot.recoverable).toEqual({ failed: 0, cancelled: 0 });
+
+        const secondRetry = await onRetryFailedRequest(
+            context(new Request('https://example.test/api/downloads/retry-failed', { method: 'POST' }))
+        );
+        const secondRetryBody = await secondRetry.json();
+        expect(secondRetryBody).toMatchObject({ matched: 0, unique: 0 });
+
+        const secondResume = await onResumeCancelledRequest(
+            context(new Request('https://example.test/api/downloads/resume-cancelled', { method: 'POST' }))
+        );
+        const secondResumeBody = await secondResume.json();
+        expect(secondResumeBody).toMatchObject({ matched: 0, unique: 0 });
     });
 
     test('retries a retryable failed job through the API', async () => {

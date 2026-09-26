@@ -347,7 +347,7 @@ export async function executeAlbumDownload({
         try {
             await downloadCover(albumResult, stagingAlbumDir, { fetchImpl, fsOps, signal });
         } catch (error) {
-            if (signal?.aborted || error?.name === 'AbortError') throw error;
+            if (signal?.aborted) throw error;
 
             const warning = {
                 failureCode: error?.failureCode || 'COVER_FETCH_FAILED',

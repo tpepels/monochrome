@@ -105,6 +105,10 @@ function buildFailureDiagnostics(error, job, failedAt) {
             duration: numberOrNull(error?.duration),
             expectedDuration: numberOrNull(error?.expectedDuration),
             extension: error?.extension || null,
+            errorCode: error?.code || null,
+            causeName: error?.cause?.name || null,
+            causeCode: error?.cause?.code || null,
+            causeMessage: error?.cause?.message ? sanitizeErrorMessage(error.cause.message) : null,
         },
         state: {
             jobId: job.jobId,
@@ -212,16 +216,30 @@ function summarizeJob(job) {
         startedAt: job.startedAt,
         completedAt: job.completedAt,
         cancelledAt: job.cancelledAt,
+        cancelReason: job.cancelReason || null,
+        requeuedAsJobId: job.requeuedAsJobId || null,
+        requeuedAt: job.requeuedAt || null,
     };
 }
 
 function isRetryableFailure(error) {
-    if (error?.name === 'AbortError') return false;
+    if (error?.name === 'AbortError' && !error?.failureCode) return false;
     return RETRYABLE_FAILURE_CODES.has(error?.failureCode);
 }
 
-function isAbortError(error) {
-    return error?.name === 'AbortError' || error?.failureCode === 'ALBUM_DOWNLOAD_CANCELLED';
+function jobPayload(job) {
+    return {
+        type: job.type,
+        id: job.id,
+        quality: job.quality,
+        forceOverwrite: job.forceOverwrite,
+        overwritePolicy: job.overwritePolicy,
+        musicBrainzReleaseId: job.musicBrainzReleaseId,
+        localRelativePath: job.localRelativePath,
+        track: job.track,
+        album: job.album,
+        tracks: job.tracks,
+    };
 }
 
 function createJob(payload, overrides = {}) {
@@ -244,6 +262,9 @@ function createJob(payload, overrides = {}) {
         startedAt: null,
         completedAt: null,
         cancelledAt: null,
+        cancelReason: null,
+        requeuedAsJobId: null,
+        requeuedAt: null,
         attempts: overrides.attempts || 0,
     };
 }
@@ -376,6 +397,7 @@ export class MemoryDownloadQueue {
             job.retryable = false;
             job.completedAt = null;
             job.cancelledAt = null;
+            job.cancelReason = null;
             job.updatedAt = timestamp;
             changed = true;
         }
@@ -451,6 +473,7 @@ export class MemoryDownloadQueue {
         job.updatedAt = timestamp;
         job.completedAt = timestamp;
         job.cancelledAt = timestamp;
+        job.cancelReason = 'user-requested';
 
         const controller = this.activeControllers.get(jobId);
         controller?.abort();
@@ -465,21 +488,52 @@ export class MemoryDownloadQueue {
             return null;
         }
 
-        return this.enqueue(
-            {
-                type: existing.type,
-                id: existing.id,
-                quality: existing.quality,
-                forceOverwrite: existing.forceOverwrite,
-                overwritePolicy: existing.overwritePolicy,
-                musicBrainzReleaseId: existing.musicBrainzReleaseId,
-                localRelativePath: existing.localRelativePath,
-                track: existing.track,
-                album: existing.album,
-                tracks: existing.tracks,
-            },
-            config
-        );
+        const retried = await this.enqueue(jobPayload(existing), config);
+        existing.requeuedAsJobId = retried.jobId;
+        existing.requeuedAt = nowIso();
+        await this.persistJob(existing);
+        return retried;
+    }
+
+    async requeueAll(status, config = this.lastConfig) {
+        const matching = this.order
+            .map((jobId) => this.jobs.get(jobId))
+            .filter((job) => job?.status === status && !job.requeuedAsJobId);
+
+        const groups = new Map();
+        for (const job of matching) {
+            const key = [job.type, job.id, job.quality].join('\u0000');
+            const group = groups.get(key) || [];
+            group.push(job);
+            groups.set(key, group);
+        }
+
+        const jobs = [];
+        for (const group of groups.values()) {
+            const requeued = await this.enqueue(jobPayload(group[0]), config);
+            jobs.push(requeued);
+            for (const source of group) {
+                source.requeuedAsJobId = requeued.jobId;
+                source.requeuedAt = nowIso();
+                await this.persistJob(source);
+            }
+        }
+
+        return {
+            success: true,
+            sourceStatus: status,
+            matched: matching.length,
+            unique: groups.size,
+            jobs,
+        };
+    }
+
+    retryAllFailed(config = this.lastConfig) {
+        return this.requeueAll(DOWNLOAD_JOB_STATUSES.FAILED, config);
+    }
+
+    resumeAllCancelled(config = this.lastConfig) {
+        return this.requeueAll(DOWNLOAD_JOB_STATUSES.CANCELLED, config);
     }
 
     snapshot(config = this.lastConfig) {
@@ -495,6 +549,11 @@ export class MemoryDownloadQueue {
         for (const job of jobs) {
             counts[job.status] = (counts[job.status] || 0) + 1;
         }
+
+        const recoverable = {
+            failed: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.FAILED && !job.requeuedAsJobId).length,
+            cancelled: jobs.filter((job) => job.status === DOWNLOAD_JOB_STATUSES.CANCELLED && !job.requeuedAsJobId).length,
+        };
 
         return {
             success: true,
@@ -515,6 +574,7 @@ export class MemoryDownloadQueue {
             },
             config: publicConfig(config),
             counts,
+            recoverable,
             jobs,
         };
     }
@@ -650,17 +710,19 @@ export class MemoryDownloadQueue {
             await this.persistJob(job);
         } catch (error) {
             const timestamp = nowIso();
-            if (job.status === DOWNLOAD_JOB_STATUSES.CANCELLED || isAbortError(error)) {
+            if (job.status === DOWNLOAD_JOB_STATUSES.CANCELLED || controller.signal.aborted) {
                 job.status = DOWNLOAD_JOB_STATUSES.CANCELLED;
                 job.progress = { ...job.progress, message: 'Cancelled' };
                 job.cancelledAt = job.cancelledAt || timestamp;
                 job.completedAt = job.completedAt || timestamp;
                 job.retryable = false;
+                job.cancelReason = job.cancelReason || 'controller-aborted';
             } else {
                 job.diagnostics = buildFailureDiagnostics(error, job, timestamp);
                 job.status = DOWNLOAD_JOB_STATUSES.FAILED;
                 job.error = sanitizeErrorMessage(error?.message || String(error));
                 job.failureCode = error?.failureCode || 'DOWNLOAD_JOB_FAILED';
+                job.cancelReason = null;
                 job.retryable = isRetryableFailure(error);
                 job.progress = {
                     ...job.progress,
@@ -871,6 +933,16 @@ export class RedisDownloadQueue extends MemoryDownloadQueue {
         return super.retry(jobId, config);
     }
 
+    async retryAllFailed(config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.retryAllFailed(config);
+    }
+
+    async resumeAllCancelled(config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.resumeAllCancelled(config);
+    }
+
     async snapshot(config = this.lastConfig) {
         await this.hydrateFromRedis();
         return super.snapshot(config);
@@ -977,6 +1049,20 @@ export class DownloadQueueManager {
     async retry(jobId, config) {
         const backend = await this.backendFor(config);
         return backend.retry(jobId, config);
+    }
+
+    async retryAllFailed(config) {
+        const backend = await this.backendFor(config);
+        if (backend instanceof RedisDownloadQueue) await backend.hydrateFromRedis();
+        else if (backend instanceof MemoryDownloadQueue) await backend.hydrateFromDisk(config);
+        return backend.retryAllFailed(config);
+    }
+
+    async resumeAllCancelled(config) {
+        const backend = await this.backendFor(config);
+        if (backend instanceof RedisDownloadQueue) await backend.hydrateFromRedis();
+        else if (backend instanceof MemoryDownloadQueue) await backend.hydrateFromDisk(config);
+        return backend.resumeAllCancelled(config);
     }
 
     async snapshot(config) {
