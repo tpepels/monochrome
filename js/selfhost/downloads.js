@@ -143,21 +143,6 @@ async function fetchServerDownloadJob(jobId, { signal } = {}) {
     return body.job;
 }
 
-async function cancelServerDownload(jobId) {
-    const response = await fetch(`${SERVER_DOWNLOAD_API}/${encodeURIComponent(jobId)}/cancel`, {
-        method: 'POST',
-        headers: {
-            accept: 'application/json',
-        },
-    });
-
-    const body = await response.json().catch(() => null);
-    if (!response.ok || !body?.success) {
-        throw new Error(body?.error || `Server download cancel failed: ${response.status}`);
-    }
-    return body.job;
-}
-
 function delayMs(ms, signal) {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
@@ -224,16 +209,28 @@ function serverJobStatusText(job) {
     }
 }
 
-function attachServerCancel(button, jobId) {
-    button?.addEventListener(
+function replaceServerCancelWithDismiss(button, onDismiss) {
+    if (!button) return null;
+
+    // Upstream wires this button to AbortController.abort(). Server downloads
+    // keep running independently, so replace the node to remove that inherited
+    // listener and make the x a presentation-only dismiss action.
+    const dismissButton = button.cloneNode(true);
+    dismissButton.title = 'Hide download notification';
+    dismissButton.setAttribute('aria-label', 'Hide download notification');
+    button.replaceWith(dismissButton);
+
+    dismissButton.addEventListener(
         'click',
-        () => {
-            cancelServerDownload(jobId).catch((error) => {
-                console.warn('Failed to cancel server download:', error);
-            });
+        (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDismiss?.();
         },
         { once: true }
     );
+
+    return dismissButton;
 }
 
 function formatBytes(bytes) {
@@ -321,8 +318,10 @@ function validateBridge(ui) {
         'addDownloadTask',
         'updateDownloadProgress',
         'completeDownloadTask',
+        'dismissDownloadTask',
         'createBulkDownloadNotification',
         'completeBulkDownload',
+        'dismissBulkDownloadNotification',
     ];
     for (const name of required) {
         if (typeof ui?.[name] !== 'function') {
@@ -367,7 +366,10 @@ export function createSelfHostDownloadBridge(ui) {
 
             serverOngoingDownloads.add(downloadKey);
             const { taskEl } = ui.addDownloadTask(track.id, track, null, api, controller);
-            attachServerCancel(taskEl.querySelector('.download-cancel'), body.jobId);
+            replaceServerCancelWithDismiss(
+                taskEl.querySelector('.download-cancel'),
+                () => ui.dismissDownloadTask(track.id)
+            );
             ui.updateDownloadProgress(track.id, { message: 'Queued on server' });
 
             pollServerDownloadJob(body.jobId, {
@@ -426,7 +428,10 @@ export function createSelfHostDownloadBridge(ui) {
                 album.title || album.name || 'Album',
                 1
             );
-            attachServerCancel(notification.querySelector('.download-cancel'), body.jobId);
+            replaceServerCancelWithDismiss(
+                notification.querySelector('.download-cancel'),
+                () => ui.dismissBulkDownloadNotification(notification)
+            );
             updateServerBulkDownloadProgress(notification, body.job, tracks);
 
             pollServerDownloadJob(body.jobId, {

@@ -31,8 +31,8 @@ let downloadNotificationContainer = null;
 
 // SELF-HOST INVARIANT/BOUNDARY: keep fork logic in js/selfhost/downloads.js; adapt only this seam after upstream changes.
 const selfHostDownloads = createSelfHostDownloadBridge({
-    showNotification, addDownloadTask, updateDownloadProgress, completeDownloadTask,
-    createBulkDownloadNotification, completeBulkDownload,
+    showNotification, addDownloadTask, updateDownloadProgress, completeDownloadTask, dismissDownloadTask,
+    createBulkDownloadNotification, completeBulkDownload, dismissBulkDownloadNotification,
 });
 
 /** Wraps a single {@link WriterEntry}-like object as an AsyncIterable for use with IBulkDownloadWriter.write(). */
@@ -241,6 +241,14 @@ export function addDownloadTask(trackId, track, _filename, api, abortController)
     });
 
     return { taskEl, abortController };
+}
+
+export function dismissDownloadTask(trackId) {
+    const task = downloadTasks.get(trackId);
+    if (!task) return;
+
+    task.taskEl.remove();
+    downloadTasks.delete(trackId);
 }
 
 export function updateDownloadProgress(trackId, progress) {
@@ -1063,6 +1071,11 @@ function createBulkDownloadNotification(type, name, _totalItems) {
  * @param {FfmpegProgress | ProgressMessage | null} progress
  * @returns
  */
+function dismissBulkDownloadNotification(notifEl) {
+    notifEl?.remove();
+    bulkDownloadTasks.delete(notifEl);
+}
+
 function updateBulkDownloadProgress(notifEl, current, total, currentItem, progress = null) {
     /** @type {HTMLElement | null} */
     const progressFill = notifEl.querySelector('.download-progress-fill');
