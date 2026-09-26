@@ -94,6 +94,13 @@ describe('self-host download bridge', () => {
                 { status: 200, headers: { 'content-type': 'application/json' } }
             )
         );
+        await vi.waitFor(() => {
+            expect(ui.completeDownloadTask).toHaveBeenCalledWith(
+                'dismiss-track',
+                true,
+                'Server download complete'
+            );
+        });
     });
 
     it('dismisses a server album toast without cancelling the server job', async () => {
@@ -158,6 +165,9 @@ describe('self-host download bridge', () => {
                 { status: 200, headers: { 'content-type': 'application/json' } }
             )
         );
+        await vi.waitFor(() => {
+            expect(ui.completeBulkDownload).toHaveBeenCalledWith(bulkEl, true);
+        });
     });
 
     it('queues a server track using the bridge and reports completion through upstream UI callbacks', async () => {
