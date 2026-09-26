@@ -418,13 +418,30 @@ describe('server download API', () => {
         });
         const basePayload = { type: 'album', id: 'same-album', quality: 'LOSSLESS' };
 
-        const older = createJob(basePayload, { jobId: 'old-failed', status: 'failed' });
-        older.updatedAt = '2026-09-26T18:00:00.000Z';
-        older.failureCode = 'CDN_FETCH_FAILED';
+        const older = {
+            ...basePayload,
+            jobId: 'old-failed',
+            status: 'failed',
+            progress: { message: 'Failed' },
+            error: 'old failure',
+            failureCode: 'CDN_FETCH_FAILED',
+            retryable: true,
+            createdAt: '2026-09-26T17:00:00.000Z',
+            updatedAt: '2026-09-26T18:00:00.000Z',
+        };
 
-        const newer = createJob(basePayload, { jobId: 'new-cancelled', status: 'cancelled' });
-        newer.updatedAt = '2026-09-26T19:00:00.000Z';
-        newer.cancelledAt = newer.updatedAt;
+        const newer = {
+            ...basePayload,
+            jobId: 'new-cancelled',
+            status: 'cancelled',
+            progress: { message: 'Cancelled' },
+            retryable: false,
+            createdAt: '2026-09-26T18:30:00.000Z',
+            updatedAt: '2026-09-26T19:00:00.000Z',
+            completedAt: '2026-09-26T19:00:00.000Z',
+            cancelledAt: '2026-09-26T19:00:00.000Z',
+            cancelReason: 'user-requested',
+        };
 
         queue.jobs.set(older.jobId, older);
         queue.jobs.set(newer.jobId, newer);
