@@ -232,6 +232,38 @@ test('publishes the album when the cover fetch fails', async () => {
     await expect(fs.stat(path.join(finalAlbumDir, 'cover.jpg'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+test('publishes the album when the cover fetch aborts unexpectedly', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-cover-abort',
+        config,
+        resolver: resolverFor(albumResult()),
+        trackExecutor: successfulTrackExecutor(),
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cover.test/cover.jpg') {
+                throw new DOMException('cover fetch aborted internally', 'AbortError');
+            }
+            return new Response('missing', { status: 404 });
+        },
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+        failureCode: 'COVER_FETCH_FAILED',
+        message: 'cover fetch aborted internally',
+    });
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+});
+
 test('reuses validated staged tracks after an interrupted album download', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
