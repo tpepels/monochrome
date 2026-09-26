@@ -291,8 +291,9 @@ function renderSummary(data) {
         return '<div class="metric"><strong>' + item[1] + '</strong><span>' + item[0] + '</span></div>';
     }).join('');
 
-    document.getElementById('retry-failed').disabled = busy || !(counts.failed > 0);
-    document.getElementById('resume-cancelled').disabled = busy || !(counts.cancelled > 0);
+    const recoverable = data.recoverable || {};
+    document.getElementById('retry-failed').disabled = busy || !(recoverable.failed > 0);
+    document.getElementById('resume-cancelled').disabled = busy || !(recoverable.cancelled > 0);
 
     const worker = data.worker || {};
     document.getElementById('worker').innerHTML =
