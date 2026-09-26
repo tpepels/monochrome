@@ -887,10 +887,16 @@ export class MemoryDownloadQueue {
                 ? Math.min(99, Math.round(((completedTracks + currentTrackFraction) / totalTracks) * 90))
                 : 1;
         job.publicationPhase = event.phase || job.publicationPhase;
+        const retryWaitSeconds = Number(event.trackTransfer?.retryWaitSeconds || 0);
         job.progress = {
             ...job.progress,
             percent: event.phase === 'publishing' ? 95 : percent,
-            message: event.phase === 'publishing' ? 'Publishing album' : 'Processing album',
+            message:
+                event.phase === 'publishing'
+                    ? 'Publishing album'
+                    : retryWaitSeconds > 0
+                      ? `Retrying current track in ${retryWaitSeconds}s`
+                      : 'Processing album',
             phase: event.phase,
             totalTracks,
             completedTracks,
