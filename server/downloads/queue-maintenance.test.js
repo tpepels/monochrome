@@ -86,7 +86,7 @@ test('cancels processing jobs with AbortController and preserves cancellation st
     expect(queue.get(job.jobId).retryable).toBe(false);
 });
 
-test('failed retryability follows failure category and retry creates a fresh job id', async () => {
+test('failed retryability follows failure category and retry reuses the same job id', async () => {
     const queue = new MemoryDownloadQueue({
         trackExecutor: async () => {
             const error = new Error('cdn unavailable');
@@ -103,7 +103,7 @@ test('failed retryability follows failure category and retry creates a fresh job
     expect(failedState.retryable).toBe(true);
 
     const retry = await queue.retry(failed.jobId, config({ workerEnabled: false }));
-    expect(retry.jobId).not.toBe(failed.jobId);
+    expect(retry.jobId).toBe(failed.jobId);
     expect(retry.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
 });
 
@@ -152,7 +152,7 @@ test('hard queue reset removes transient data but preserves completed music', as
         clearedJobs: 1,
         cleanup: true,
     });
-    expect(queue.snapshot(cfg).jobs).toHaveLength(0);
+    expect((await queue.snapshot(cfg)).jobs).toHaveLength(0);
     await expect(fs.stat(tempJob)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(stagingJob)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(completedFile)).resolves.toBeTruthy();
