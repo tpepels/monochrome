@@ -23,6 +23,7 @@ const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
 const DOWNLOAD_TRANSFER_MAX_ATTEMPTS = 3;
 const DOWNLOAD_RETRY_BASE_DELAY_MS = 250;
+const DOWNLOAD_RETRY_AFTER_MAX_MS = 2 * 60 * 1000;
 
 function pipelineError(message, failureCode, details = {}) {
     const error = new Error(message);
@@ -432,10 +433,34 @@ function isRetryableTransferError(error) {
     );
 }
 
-async function waitBeforeTransferRetry(attempt, signal) {
+export function parseRetryAfterMs(value, now = Date.now()) {
+    if (value == null || value === '') return null;
+
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.min(DOWNLOAD_RETRY_AFTER_MAX_MS, Math.round(seconds * 1000));
+    }
+
+    const date = Date.parse(String(value));
+    if (!Number.isFinite(date)) return null;
+    return Math.min(DOWNLOAD_RETRY_AFTER_MAX_MS, Math.max(0, date - now));
+}
+
+async function waitBeforeTransferRetry(attempt, signal, error, onProgress) {
     if (signal?.aborted) {
         throw signal.reason || new DOMException('Aborted', 'AbortError');
     }
+
+    const retryAfterMs = parseRetryAfterMs(error?.retryAfter);
+    const waitMs = retryAfterMs ?? DOWNLOAD_RETRY_BASE_DELAY_MS * attempt;
+
+    onProgress?.({
+        retryWaitMs: waitMs,
+        retryWaitSeconds: Math.ceil(waitMs / 1000),
+        retryAttempt: attempt + 1,
+        retryStatus: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
+        retryAfter: error?.retryAfter || null,
+    });
 
     await new Promise((resolve, reject) => {
         let timer = null;
@@ -448,7 +473,7 @@ async function waitBeforeTransferRetry(attempt, signal) {
             reject(signal.reason || new DOMException('Aborted', 'AbortError'));
         };
 
-        timer = setTimeout(finish, DOWNLOAD_RETRY_BASE_DELAY_MS * attempt);
+        timer = setTimeout(finish, waitMs);
         signal?.addEventListener?.('abort', onAbort, { once: true });
     });
 }
@@ -638,7 +663,7 @@ async function downloadToTempFile(
             }
 
             if (retryError) {
-                await waitBeforeTransferRetry(attempt, signal);
+                await waitBeforeTransferRetry(attempt, signal, retryError, onProgress);
             }
         }
     }
