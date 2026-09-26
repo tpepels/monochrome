@@ -217,6 +217,8 @@ function summarizeJob(job) {
         completedAt: job.completedAt,
         cancelledAt: job.cancelledAt,
         cancelReason: job.cancelReason || null,
+        requeuedAsJobId: job.requeuedAsJobId || null,
+        requeuedAt: job.requeuedAt || null,
     };
 }
 
