@@ -77,7 +77,10 @@ function getAlbumTitle(track) {
 }
 
 function getTrackNumber(track) {
-    const value = Number.parseInt(String(track?.trackNumber || track?.number || 1), 10);
+    const value = Number.parseInt(
+        String(track?.trackNumber || track?.number || track?.downloadOrder?.trackNumber || 1),
+        10
+    );
     return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
