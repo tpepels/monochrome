@@ -31,56 +31,84 @@ function shouldUseServerDownloads() {
 
 /**
  * SELF-HOST INVARIANT:
- * Keep the admin entry as one small self-host-only sidebar item. The admin
- * dashboard itself stays outside the upstream frontend at /downloads-admin.
+ * Keep fork-only service links small and isolated in the Monochrome primary
+ * sidebar. The downloads dashboard itself remains outside the upstream app.
  */
-function ensureServerDownloadsSidebarLink() {
-    if (
-        typeof document === 'undefined' ||
-        !shouldUseServerDownloads() ||
-        document.getElementById('sidebar-nav-downloads-admin')
-    ) {
-        return;
-    }
+function ensureSelfHostSidebarLinks() {
+    if (typeof document === 'undefined' || !shouldUseServerDownloads()) return;
 
     const navList = document.querySelector('.sidebar-nav.main > ul');
     if (!navList) return;
 
-    const item = document.createElement('li');
-    item.className = 'nav-item';
-    item.id = 'sidebar-nav-downloads-admin';
-    item.innerHTML = `
-        <a href="/downloads-admin" target="_blank" rel="noopener noreferrer" title="Server Downloads">
-            <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <path d="M12 3v12"></path>
-                <path d="m7 10 5 5 5-5"></path>
-                <path d="M5 21h14"></path>
-            </svg>
-            <span>Downloads</span>
-        </a>
-    `;
-
     const settingsItem = document.getElementById('sidebar-nav-settings');
-    navList.insertBefore(item, settingsItem || null);
+
+    if (!document.getElementById('sidebar-nav-downloads-admin')) {
+        const downloadsItem = document.createElement('li');
+        downloadsItem.className = 'nav-item';
+        downloadsItem.id = 'sidebar-nav-downloads-admin';
+        downloadsItem.innerHTML = `
+            <a href="/downloads-admin" target="_blank" rel="noopener noreferrer" title="Server Downloads">
+                <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M12 3v12"></path>
+                    <path d="m7 10 5 5 5-5"></path>
+                    <path d="M5 21h14"></path>
+                </svg>
+                <span>Downloads</span>
+            </a>
+        `;
+        navList.insertBefore(downloadsItem, settingsItem || null);
+    }
+
+    if (!document.getElementById('sidebar-nav-ytdlp')) {
+        const ytdlpItem = document.createElement('li');
+        ytdlpItem.className = 'nav-item';
+        ytdlpItem.id = 'sidebar-nav-ytdlp';
+        ytdlpItem.innerHTML = `
+            <a
+                href="http://192.168.1.200:4545/"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="yt-dlp"
+            >
+                <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <path d="m7 10 5 5 5-5"></path>
+                    <path d="M12 15V3"></path>
+                </svg>
+                <span>yt-dlp</span>
+            </a>
+        `;
+        navList.insertBefore(ytdlpItem, settingsItem || null);
+    }
 }
 
 function scheduleSidebarLink() {
     if (typeof document === 'undefined') return;
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', ensureServerDownloadsSidebarLink, { once: true });
+        document.addEventListener('DOMContentLoaded', ensureSelfHostSidebarLinks, { once: true });
     } else {
-        queueMicrotask(ensureServerDownloadsSidebarLink);
+        queueMicrotask(ensureSelfHostSidebarLinks);
     }
 }
 
