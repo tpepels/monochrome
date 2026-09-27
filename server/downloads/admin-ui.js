@@ -55,6 +55,7 @@ button:disabled { opacity:.45; cursor:default; }
 .badge.processing { border-color:var(--blue); }
 .badge.completed { border-color:var(--good); }
 .badge.failed { border-color:var(--bad); }
+.badge.partial { border-color:var(--warn); }
 .badge.queued { border-color:var(--warn); }
 .progress { height:6px; background:var(--panel-2); border-radius:999px; overflow:hidden; margin:11px 0 8px; }
 .progress > div { height:100%; background:var(--accent); transition:width .25s ease; }
@@ -290,6 +291,7 @@ function renderSummary(data) {
         ['Queued', counts.queued || 0],
         ['Processing', counts.processing || 0],
         ['Completed', counts.completed || 0],
+        ['Partial', counts.partial || 0],
         ['Failed', counts.failed || 0],
         ['Cancelled', counts.cancelled || 0]
     ];
@@ -343,6 +345,28 @@ function jobDetails(job) {
         lines.push(esc(text));
     }
 
+    const missingTracks =
+        (job.result && Array.isArray(job.result.missingTracks) && job.result.missingTracks.length
+            ? job.result.missingTracks
+            : Array.isArray(progress.missingTracks)
+              ? progress.missingTracks
+              : []);
+    if (missingTracks.length) {
+        lines.push(
+            '<strong>Unavailable:</strong> ' +
+            missingTracks.map(function (track) {
+                return esc(track.title || ('track ' + track.trackId));
+            }).join(', ')
+        );
+    }
+    if (job.status === 'partial') {
+        lines.push(
+            job.result && job.result.partialPublished
+                ? '<strong>Partial album is in the music library.</strong>'
+                : '<strong>Partial album is still in staging.</strong>'
+        );
+    }
+
     if (job.status === 'cancelled' && job.cancelReason) {
         lines.push('Cancellation: ' + esc(job.cancelReason));
     }
@@ -372,7 +396,17 @@ function renderJobs(data) {
     root.innerHTML = jobs.map(function (job) {
         const p = Math.max(0, Math.min(100, Number(job.progress && job.progress.percent) || 0));
         const canCancel = ['queued', 'processing', 'paused'].includes(job.status);
-        const canRetry = job.status === 'failed' && job.retryable;
+        const canRetry = ['failed', 'partial'].includes(job.status) && job.retryable;
+        const canSkip =
+            job.type === 'album' &&
+            job.status === 'failed' &&
+            job.progress &&
+            (job.progress.failedTrack || job.progress.currentTrack);
+        const canPublishPartial =
+            job.status === 'partial' &&
+            job.result &&
+            job.result.partial &&
+            !job.result.partialPublished;
         const title = job.displayName || (job.type + ' ' + job.id);
 
         return '<article class="job">' +
@@ -392,7 +426,9 @@ function renderJobs(data) {
                 '</div>' +
                 '<div class="job-actions">' +
                     (canCancel ? '<button data-cancel="' + esc(job.jobId) + '">Cancel</button>' : '') +
-                    (canRetry ? '<button data-retry="' + esc(job.jobId) + '">Retry</button>' : '') +
+                    (canSkip ? '<button data-skip-track="' + esc(job.jobId) + '">Skip track + continue</button>' : '') +
+                    (canPublishPartial ? '<button data-publish-partial="' + esc(job.jobId) + '">Publish partial</button>' : '') +
+                    (canRetry ? '<button data-retry="' + esc(job.jobId) + '">Retry missing</button>' : '') +
                 '</div>' +
             '</div>' +
         '</article>';
@@ -403,6 +439,12 @@ function renderJobs(data) {
     });
     root.querySelectorAll('[data-retry]').forEach(function (button) {
         button.addEventListener('click', function () { runJobAction(button, 'retry'); });
+    });
+    root.querySelectorAll('[data-skip-track]').forEach(function (button) {
+        button.addEventListener('click', function () { runJobAction(button, 'skip-track'); });
+    });
+    root.querySelectorAll('[data-publish-partial]').forEach(function (button) {
+        button.addEventListener('click', function () { runJobAction(button, 'publish-partial'); });
     });
     root.querySelectorAll('[data-copy-diagnostics]').forEach(function (button) {
         button.addEventListener('click', function () { copyDiagnostics(button); });
@@ -421,12 +463,28 @@ async function refresh() {
 }
 
 async function runJobAction(button, action) {
-    const jobId = button.dataset[action];
+    const dataKey =
+        action === 'skip-track' ? 'skipTrack' :
+        action === 'publish-partial' ? 'publishPartial' :
+        action;
+    const jobId = button.dataset[dataKey];
     if (!jobId || busy) return;
+
+    if (
+        action === 'publish-partial' &&
+        !confirm('Move the currently available tracks into the final music library? The job will remain Partial so the missing tracks can be retried later.')
+    ) {
+        return;
+    }
 
     busy = true;
     button.disabled = true;
-    setMessage((action === 'cancel' ? 'Cancelling' : 'Retrying') + ' job…');
+    const actionLabel =
+        action === 'cancel' ? 'Cancelling' :
+        action === 'retry' ? 'Retrying missing tracks for' :
+        action === 'skip-track' ? 'Skipping unavailable track and continuing' :
+        'Publishing partial album for';
+    setMessage(actionLabel + ' job…');
 
     try {
         await api('/api/downloads/' + encodeURIComponent(jobId) + '/' + action, { method:'POST' });
