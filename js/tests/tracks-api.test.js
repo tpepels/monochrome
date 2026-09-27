@@ -451,7 +451,14 @@ describe('tracks-api module', () => {
                 },
             });
 
-            expect(stream).toBeNull();
+            expect(stream).toMatchObject({
+                unavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: '245266990510825472',
+                candidatesConsidered: 1,
+                bestMatchScore: 0,
+                reason: 'no-safe-alternate-match',
+            });
         });
 
         it('resolves external track via search lookup when matching candidate found', async () => {
