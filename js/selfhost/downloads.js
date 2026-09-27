@@ -9,7 +9,7 @@
 // instead of moving this implementation back into the upstream file.
 
 const SERVER_DOWNLOAD_API = '/api/downloads';
-const SERVER_DOWNLOAD_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const SERVER_DOWNLOAD_TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
 const SERVER_DOWNLOAD_UNSUPPORTED_STATUSES = new Set([404, 405, 501]);
 const SERVER_DOWNLOAD_POLL_INTERVAL_MS = 1500;
 
@@ -228,6 +228,11 @@ function serverJobStatusText(job) {
             return 'Paused on server';
         case 'completed':
             return 'Server download complete';
+        case 'partial': {
+            const completed = Number(job.progress?.completedTracks || 0);
+            const total = Number(job.progress?.totalTracks || 0);
+            return total > 0 ? `Partial - ${completed}/${total} tracks` : 'Partial album';
+        }
         case 'cancelled':
             return 'Server download cancelled';
         case 'failed':
@@ -443,6 +448,13 @@ export function createSelfHostDownloadBridge(ui) {
                 onUpdate: (job) => {
                     if (job.status === 'completed') {
                         ui.completeBulkDownload(notification, true);
+                    } else if (job.status === 'partial') {
+                        const totalTracks = Number(job.progress?.totalTracks || tracks.length || 0);
+                        const completedTracks = Number(job.progress?.completedTracks || 0);
+                        ui.completeBulkDownload(notification, true, serverJobStatusText(job), {
+                            failedTracks: Math.max(0, totalTracks - completedTracks),
+                            totalTracks,
+                        });
                     } else if (job.status === 'failed' || job.status === 'cancelled') {
                         ui.completeBulkDownload(notification, false, serverJobStatusText(job));
                     } else {
