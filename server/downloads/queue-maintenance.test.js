@@ -290,6 +290,7 @@ test('partial album can be published without completing the queue item and retri
     expect(retried.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
     expect(retried.skippedTrackIds).toEqual([]);
     expect(retried.missingTracks).toEqual([]);
+    expect(retried.partialPublishedAt).toBeTruthy();
 });
 
 test('a partial album remains the canonical row for duplicate enqueue requests', async () => {
