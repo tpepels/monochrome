@@ -202,6 +202,34 @@ export class InMemoryPublishLock extends InMemoryMaintenanceLock {}
 
 export const defaultPublishLock = new InMemoryPublishLock();
 
+export async function publishPartialAlbum({
+    stagingAlbumDir,
+    finalAlbumDir,
+    albumName,
+    jobId,
+    publishLock = defaultPublishLock,
+    fsOps = fs,
+    signal,
+} = {}) {
+    if (!stagingAlbumDir || !finalAlbumDir) {
+        throw albumError('Partial album staging/final paths are required', 'PARTIAL_ALBUM_PATHS_REQUIRED');
+    }
+    if (!(await pathExists(stagingAlbumDir, fsOps))) {
+        throw albumError('Partial album staging directory no longer exists', 'PARTIAL_ALBUM_STAGING_MISSING');
+    }
+
+    return publishLock.runExclusive(() =>
+        publishAlbumDirectory({
+            stagingAlbumDir,
+            finalAlbumDir,
+            albumName,
+            jobId,
+            fsOps,
+            signal,
+        })
+    );
+}
+
 async function downloadCover(album, stagingAlbumDir, { fetchImpl = fetch, fsOps = fs, signal } = {}) {
     if (!album.coverUrl) return null;
 
@@ -292,6 +320,7 @@ export async function executeAlbumDownload({
     sidecarWriters = [],
     album = null,
     tracks = null,
+    skipTrackIds = [],
     onProgress,
     signal,
 } = {}) {
@@ -357,17 +386,45 @@ export async function executeAlbumDownload({
 
         const trackResults = [];
         const trackProgress = [];
+        const skippedTrackIdSet = new Set((skipTrackIds || []).map((value) => String(value)));
+        const missingTracks = [];
         let completedTracks = 0;
 
         for (let index = 0; index < albumResult.tracks.length; index++) {
             assertNotAborted(signal);
             const track = albumResult.tracks[index];
+            if (skippedTrackIdSet.has(String(track.id))) {
+                const missing = {
+                    trackId: String(track.id),
+                    title: track.title || track.name || null,
+                    trackNumber: track.trackNumber || track.number || index + 1,
+                    discNumber: track.volumeNumber || track.discNumber || 1,
+                };
+                missingTracks.push(missing);
+                trackProgress[index] = {
+                    id: track.id,
+                    status: 'unavailable',
+                    title: missing.title,
+                };
+                onProgress?.({
+                    phase: 'processing',
+                    currentTrack: null,
+                    totalTracks: albumResult.tracks.length,
+                    completedTracks,
+                    missingTracks,
+                    failedTracks: missingTracks.map((item) => item.trackId),
+                    trackProgress,
+                });
+                continue;
+            }
+
             onProgress?.({
                 phase: 'processing',
                 currentTrack: track.id,
                 totalTracks: albumResult.tracks.length,
                 completedTracks,
-                failedTracks: [],
+                failedTracks: missingTracks.map((item) => item.trackId),
+                missingTracks,
                 trackProgress,
             });
 
@@ -410,7 +467,8 @@ export async function executeAlbumDownload({
                                 currentTrack: track.id,
                                 totalTracks: albumResult.tracks.length,
                                 completedTracks,
-                                failedTracks: [],
+                                failedTracks: missingTracks.map((item) => item.trackId),
+                                missingTracks,
                                 trackTransfer,
                                 trackProgress,
                             }),
@@ -465,7 +523,8 @@ export async function executeAlbumDownload({
                 currentTrack: track.id,
                 totalTracks: albumResult.tracks.length,
                 completedTracks,
-                failedTracks: [],
+                failedTracks: missingTracks.map((item) => item.trackId),
+                missingTracks,
                 trackProgress,
             });
         }
@@ -496,6 +555,35 @@ export async function executeAlbumDownload({
         for (const writer of sidecarWriters) {
             assertNotAborted(signal);
             await writer({ album: albumResult, stagingAlbumDir, fsOps });
+        }
+
+        if (missingTracks.length) {
+            preserveLibraryStaging = true;
+            onProgress?.({
+                phase: 'partial',
+                currentTrack: null,
+                totalTracks: albumResult.tracks.length,
+                completedTracks,
+                missingTracks,
+                failedTracks: missingTracks.map((item) => item.trackId),
+                trackProgress,
+            });
+
+            return {
+                success: true,
+                partial: true,
+                jobId,
+                album: albumResult,
+                tracks: trackResults,
+                relativePath: albumRelativePath,
+                stagingAlbumDir,
+                finalAlbumDir,
+                missingTracks,
+                completedTracks,
+                totalTracks: albumResult.tracks.length,
+                warnings,
+                action: 'partial-staged',
+            };
         }
 
         onProgress?.({
