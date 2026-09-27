@@ -357,7 +357,6 @@ export async function executeAlbumDownload({
 
         const trackResults = [];
         const trackProgress = [];
-        const failedTracks = [];
         let completedTracks = 0;
 
         for (let index = 0; index < albumResult.tracks.length; index++) {
@@ -368,7 +367,7 @@ export async function executeAlbumDownload({
                 currentTrack: track.id,
                 totalTracks: albumResult.tracks.length,
                 completedTracks,
-                failedTracks: failedTracks.map((failure) => failure.trackId),
+                failedTracks: [],
                 trackProgress,
             });
 
@@ -411,7 +410,7 @@ export async function executeAlbumDownload({
                                 currentTrack: track.id,
                                 totalTracks: albumResult.tracks.length,
                                 completedTracks,
-                                failedTracks: failedTracks.map((failure) => failure.trackId),
+                                failedTracks: [],
                                 trackTransfer,
                                 trackProgress,
                             }),
@@ -426,20 +425,39 @@ export async function executeAlbumDownload({
                     finalFile: result.finalFile,
                 };
             } catch (error) {
-                if (signal?.aborted || error?.name === 'AbortError' && signal?.aborted) throw error;
+                if (signal?.aborted || (error?.name === 'AbortError' && signal?.aborted)) throw error;
 
                 error.trackId = error.trackId || track.id;
-                failedTracks.push({
-                    trackId: track.id,
-                    title: track.title || track.name || null,
-                    error,
-                });
+                error.failedTracks = [
+                    {
+                        trackId: track.id,
+                        title: track.title || track.name || null,
+                        failureCode: error?.failureCode || 'TRACK_DOWNLOAD_FAILED',
+                        message: error?.message || 'Track download failed',
+                    },
+                ];
+                error.albumCompletedTracks = completedTracks;
+                error.albumTotalTracks = albumResult.tracks.length;
+
                 trackProgress[index] = {
                     id: track.id,
                     status: 'failed',
                     failureCode: error?.failureCode || 'TRACK_DOWNLOAD_FAILED',
                     error: error?.message || 'Track download failed',
                 };
+
+                onProgress?.({
+                    phase: 'failed',
+                    currentTrack: track.id,
+                    failedTrack: track.id,
+                    totalTracks: albumResult.tracks.length,
+                    completedTracks,
+                    failedTracks: [track.id],
+                    trackProgress,
+                    error: error.message,
+                    failureCode: error.failureCode || 'TRACK_DOWNLOAD_FAILED',
+                });
+                throw error;
             }
 
             onProgress?.({
@@ -447,38 +465,9 @@ export async function executeAlbumDownload({
                 currentTrack: track.id,
                 totalTracks: albumResult.tracks.length,
                 completedTracks,
-                failedTracks: failedTracks.map((failure) => failure.trackId),
+                failedTracks: [],
                 trackProgress,
             });
-        }
-
-        assertNotAborted(signal);
-
-        if (failedTracks.length) {
-            const firstFailure = failedTracks[0];
-            const error = firstFailure.error;
-            error.trackId = firstFailure.trackId;
-            error.failedTracks = failedTracks.map((failure) => ({
-                trackId: failure.trackId,
-                title: failure.title,
-                failureCode: failure.error?.failureCode || 'TRACK_DOWNLOAD_FAILED',
-                message: failure.error?.message || 'Track download failed',
-            }));
-            error.albumCompletedTracks = completedTracks;
-            error.albumTotalTracks = albumResult.tracks.length;
-
-            onProgress?.({
-                phase: 'failed',
-                currentTrack: firstFailure.trackId,
-                failedTrack: firstFailure.trackId,
-                totalTracks: albumResult.tracks.length,
-                completedTracks,
-                failedTracks: error.failedTracks.map((failure) => failure.trackId),
-                trackProgress,
-                error: error.message,
-                failureCode: error.failureCode || 'TRACK_DOWNLOAD_FAILED',
-            });
-            throw error;
         }
 
         assertNotAborted(signal);
