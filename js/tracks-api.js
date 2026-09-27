@@ -140,11 +140,21 @@ export function normalizeTracksTrack(item) {
     const artwork = getTracksClientAssetUrl(item.artwork || item.cover || '');
     const albumTitle = item.albumTitle || item.releaseTitle || (item.release && item.release.title) || '';
 
+    const releaseArtist = item.albumArtist || item.releaseArtist || null;
+    const releaseArtists =
+        Array.isArray(item.albumArtists) && item.albumArtists.length
+            ? item.albumArtists
+            : Array.isArray(item.releaseArtists) && item.releaseArtists.length
+              ? item.releaseArtists
+              : [];
+
     const album = {
         id: releaseId,
         releaseId,
         tracksReleaseId: releaseId,
         title: albumTitle,
+        artist: releaseArtist,
+        artists: releaseArtists,
         cover: artwork,
         releaseDate: item.releaseDate || '',
         _href: releaseId ? `/album/${releaseId}` : '',
@@ -735,6 +745,8 @@ export class TracksStreamerAPI {
                     ...t,
                     releaseId: data.releaseId || id,
                     albumTitle: data.title,
+                    albumArtist: album.artist,
+                    albumArtists: album.artists,
                     releaseDate: data.releaseDate,
                     artwork: t.artwork || data.artwork,
                 });
