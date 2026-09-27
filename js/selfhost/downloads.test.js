@@ -2,25 +2,41 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { createSelfHostDownloadBridge } from './downloads.js';
 
 function makeUi() {
-    const taskEl = document.createElement('div');
-    taskEl.innerHTML = '<button class="download-cancel"></button>';
-
-    const bulkEl = document.createElement('div');
-    bulkEl.innerHTML =
-        '<button class="download-cancel"></button>' +
-        '<div class="download-progress-fill"></div>' +
-        '<div class="download-status"></div>';
-
-    return {
+    const ui = {
         showNotification: vi.fn(),
-        addDownloadTask: vi.fn(() => ({ taskEl })),
         updateDownloadProgress: vi.fn(),
         completeDownloadTask: vi.fn(),
-        dismissDownloadTask: vi.fn(() => taskEl.remove()),
-        createBulkDownloadNotification: vi.fn(() => bulkEl),
+        dismissDownloadTask: vi.fn(),
         completeBulkDownload: vi.fn(),
-        dismissBulkDownloadNotification: vi.fn(() => bulkEl.remove()),
+        dismissBulkDownloadNotification: vi.fn(),
     };
+
+    ui.addDownloadTask = vi.fn((trackId, _track, _filename, _api, abortController, options = {}) => {
+        const taskEl = document.createElement('div');
+        taskEl.innerHTML = '<button class="download-cancel"></button>';
+        const button = taskEl.querySelector('.download-cancel');
+        if (options.dismissOnly) {
+            button.addEventListener('click', () => ui.dismissDownloadTask(trackId));
+        } else {
+            button.addEventListener('click', () => abortController.abort());
+        }
+        return { taskEl, abortController };
+    });
+
+    ui.createBulkDownloadNotification = vi.fn((_type, _name, _total, options = {}) => {
+        const bulkEl = document.createElement('div');
+        bulkEl.innerHTML =
+            '<button class="download-cancel"></button>' +
+            '<div class="download-progress-fill"></div>' +
+            '<div class="download-status"></div>';
+        const button = bulkEl.querySelector('.download-cancel');
+        if (options.dismissOnly) {
+            button.addEventListener('click', () => ui.dismissBulkDownloadNotification(bulkEl));
+        }
+        return bulkEl;
+    });
+
+    return ui;
 }
 
 afterEach(() => {
@@ -61,21 +77,21 @@ describe('self-host download bridge', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         const ui = makeUi();
-        const originalButton = ui.addDownloadTask().taskEl.querySelector('.download-cancel');
-        const inheritedCancel = vi.fn();
-        originalButton.addEventListener('click', inheritedCancel);
-
-        const taskEl = ui.addDownloadTask.mock.results[0].value.taskEl;
-        ui.addDownloadTask.mockClear();
-        ui.addDownloadTask.mockImplementation(() => ({ taskEl }));
-
         const bridge = createSelfHostDownloadBridge(ui);
         const track = { id: 'dismiss-track', title: 'Track' };
         await expect(bridge.tryQueueTrack(track, 'LOSSLESS', {})).resolves.toBe(true);
 
+        expect(ui.addDownloadTask).toHaveBeenCalledWith(
+            'dismiss-track',
+            track,
+            null,
+            {},
+            expect.any(AbortController),
+            { dismissOnly: true }
+        );
+        const taskEl = ui.addDownloadTask.mock.results[0].value.taskEl;
         taskEl.querySelector('.download-cancel').click();
 
-        expect(inheritedCancel).not.toHaveBeenCalled();
         expect(ui.dismissDownloadTask).toHaveBeenCalledWith('dismiss-track');
         expect(
             fetchMock.mock.calls.some(([url]) => String(url).includes('/cancel'))
@@ -128,13 +144,6 @@ describe('self-host download bridge', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         const ui = makeUi();
-        const bulkEl = ui.createBulkDownloadNotification();
-        const originalButton = bulkEl.querySelector('.download-cancel');
-        const inheritedCancel = vi.fn();
-        originalButton.addEventListener('click', inheritedCancel);
-        ui.createBulkDownloadNotification.mockClear();
-        ui.createBulkDownloadNotification.mockImplementation(() => bulkEl);
-
         const bridge = createSelfHostDownloadBridge(ui);
         await expect(
             bridge.tryQueueAlbum(
@@ -144,9 +153,15 @@ describe('self-host download bridge', () => {
             )
         ).resolves.toBe(true);
 
+        expect(ui.createBulkDownloadNotification).toHaveBeenCalledWith(
+            'album',
+            'Album',
+            1,
+            { dismissOnly: true }
+        );
+        const bulkEl = ui.createBulkDownloadNotification.mock.results[0].value;
         bulkEl.querySelector('.download-cancel').click();
 
-        expect(inheritedCancel).not.toHaveBeenCalled();
         expect(ui.dismissBulkDownloadNotification).toHaveBeenCalledWith(bulkEl);
         expect(
             fetchMock.mock.calls.some(([url]) => String(url).includes('/cancel'))
