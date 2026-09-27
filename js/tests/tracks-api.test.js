@@ -77,7 +77,7 @@ describe('tracks-api module', () => {
         });
     });
 
-    test('keeps canonical release artist on normalized track album metadata', () => {
+    it('keeps canonical release artist on normalized track album metadata', () => {
         const track = normalizeTracksTrack({
             id: 'track-1',
             title: 'Movement I',
