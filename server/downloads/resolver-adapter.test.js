@@ -97,6 +97,14 @@ describe('server resolver adapter', () => {
         expect(result.tracks).toHaveLength(2);
         expect(result.tracks[0].downloadOrder.trackNumber).toBe(1);
         expect(result.tracks[1].downloadOrder.trackNumber).toBe(2);
+        expect(result.tracks[0].album).toMatchObject({
+            id: 'alb1',
+            title: 'Album',
+            artist: { name: 'Artist' },
+            releaseDate: '',
+            cover: 'https://images.example/album.jpg',
+        });
+        expect(result.tracks[1].album.artist.name).toBe('Artist');
         expect(result.coverUrl).toBe('https://images.example/album.jpg');
     });
 
