@@ -3,14 +3,21 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { executeTrackDownload, parseRetryAfterMs } from './track-pipeline.js';
+import { resetCdnBackoffState } from './cdn-backoff.js';
 
 let root;
 
 beforeEach(async () => {
+    process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS = '1';
+    process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS = '2';
+    resetCdnBackoffState();
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'monochrome-track-pipeline-'));
 });
 
 afterEach(async () => {
+    resetCdnBackoffState();
+    delete process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS;
+    delete process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS;
     await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -195,7 +202,7 @@ test('retries a transient socket reset before response headers', async () => {
 
 test('parses Retry-After seconds and HTTP dates with a bounded wait', () => {
     expect(parseRetryAfterMs('60', 0)).toBe(60_000);
-    expect(parseRetryAfterMs('600', 0)).toBe(120_000);
+    expect(parseRetryAfterMs('600', 0)).toBe(300_000);
     expect(parseRetryAfterMs('Thu, 01 Jan 1970 00:01:00 GMT', 0)).toBe(60_000);
     expect(parseRetryAfterMs('invalid', 0)).toBeNull();
 });
