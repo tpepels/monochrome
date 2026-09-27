@@ -1032,11 +1032,13 @@ export class MemoryDownloadQueue {
             ...job.progress,
             percent: transferPercent ?? job.progress.percent ?? 1,
             message:
-                transfer.alternateSource
-                    ? 'Trying alternate track source'
-                    : retryWaitSeconds > 0
-                      ? `Retrying track in ${retryWaitSeconds}s`
-                      : 'Downloading track',
+                transfer.cdnBackoff
+                    ? `CDN backoff - ${Number(transfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
+                    : transfer.alternateSource
+                      ? 'Trying alternate track source'
+                      : retryWaitSeconds > 0
+                        ? `Retrying track in ${retryWaitSeconds}s`
+                        : 'Downloading track',
             phase: 'processing',
             downloadedBytes,
             totalBytes: totalBytes || null,
@@ -1048,6 +1050,20 @@ export class MemoryDownloadQueue {
             retryAttempt: Number(transfer.retryAttempt || 0) || null,
             retryStatus: Number(transfer.retryStatus || 0) || null,
             retryAfter: transfer.retryAfter || null,
+            cdnBackoff: Boolean(transfer.cdnBackoff),
+            cdnBackoffOrigin: transfer.cdnBackoffOrigin || null,
+            cdnBackoffFailureStreak:
+                Number.isFinite(Number(transfer.cdnBackoffFailureStreak))
+                    ? Number(transfer.cdnBackoffFailureStreak)
+                    : null,
+            cdnBackoffWaitMs:
+                Number.isFinite(Number(transfer.cdnBackoffWaitMs))
+                    ? Number(transfer.cdnBackoffWaitMs)
+                    : null,
+            cdnBackoffWaitSeconds:
+                Number.isFinite(Number(transfer.cdnBackoffWaitSeconds))
+                    ? Number(transfer.cdnBackoffWaitSeconds)
+                    : null,
             alternateSource: Boolean(transfer.alternateSource),
             originalTrackId: transfer.originalTrackId || job.progress.originalTrackId || null,
             alternateTrackId: transfer.alternateTrackId || job.progress.alternateTrackId || null,
@@ -1101,11 +1117,13 @@ export class MemoryDownloadQueue {
             message:
                 event.phase === 'publishing'
                     ? 'Publishing album'
-                    : event.trackTransfer?.alternateSource
-                      ? 'Trying alternate source for current track'
-                      : retryWaitSeconds > 0
-                        ? `Retrying current track in ${retryWaitSeconds}s`
-                        : 'Processing album',
+                    : event.trackTransfer?.cdnBackoff
+                      ? `CDN backoff - ${Number(event.trackTransfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
+                      : event.trackTransfer?.alternateSource
+                        ? 'Trying alternate source for current track'
+                        : retryWaitSeconds > 0
+                          ? `Retrying current track in ${retryWaitSeconds}s`
+                          : 'Processing album',
             phase: event.phase,
             totalTracks,
             completedTracks,

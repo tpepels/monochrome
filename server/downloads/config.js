@@ -2,6 +2,8 @@ export const DEFAULT_TEMP_ROOT = '/tmp/monochrome-downloads';
 export const DEFAULT_TRANSIENT_MIN_AGE_MS = 15 * 60 * 1000;
 export const DEFAULT_MAINTENANCE_LOCK_TIMEOUT_MS = 30 * 1000;
 export const DEFAULT_FETCH_TIMEOUT_MS = 2 * 60 * 1000;
+export const DEFAULT_CDN_BACKOFF_BASE_MS = 5 * 1000;
+export const DEFAULT_CDN_BACKOFF_MAX_MS = 5 * 60 * 1000;
 
 function readEnv(env, key) {
     if (!env || typeof env !== 'object') return undefined;
@@ -39,6 +41,14 @@ export function getDownloadsConfig(env = {}) {
             DEFAULT_TRANSIENT_MIN_AGE_MS
         ),
         fetchTimeoutMs: parsePositiveInteger(readEnv(env, 'DOWNLOAD_FETCH_TIMEOUT_MS'), DEFAULT_FETCH_TIMEOUT_MS),
+        cdnBackoffBaseMs: parsePositiveInteger(
+            readEnv(env, 'DOWNLOAD_CDN_BACKOFF_BASE_MS'),
+            DEFAULT_CDN_BACKOFF_BASE_MS
+        ),
+        cdnBackoffMaxMs: parsePositiveInteger(
+            readEnv(env, 'DOWNLOAD_CDN_BACKOFF_MAX_MS'),
+            DEFAULT_CDN_BACKOFF_MAX_MS
+        ),
         redisUrl: readEnv(env, 'REDIS_URL') || null,
         duplicateCheckBeforeQueue: parseBoolean(readEnv(env, 'DOWNLOAD_DUPLICATE_CHECK'), false),
         albumPolicy: {
@@ -57,6 +67,8 @@ export function publicConfig(config) {
         maintenanceLockTimeoutMs: config.maintenanceLockTimeoutMs,
         transientMinAgeMs: config.transientMinAgeMs,
         fetchTimeoutMs: config.fetchTimeoutMs,
+        cdnBackoffBaseMs: config.cdnBackoffBaseMs,
+        cdnBackoffMaxMs: config.cdnBackoffMaxMs,
         redisConfigured: Boolean(config.redisUrl),
         duplicateCheckBeforeQueue: config.duplicateCheckBeforeQueue,
         albumPolicy: config.albumPolicy,
