@@ -9,6 +9,7 @@ import {
     normalizeTracksSearchResults,
     extractTracksSuggestions,
     scoreTrackCandidate,
+    scoreAlternateTrackCandidate,
     TracksStreamerAPI,
     getTracksClientBaseUrl,
     getTracksClientAssetUrl,
@@ -220,6 +221,80 @@ describe('tracks-api module', () => {
         });
     });
 
+    describe('scoreAlternateTrackCandidate', () => {
+        it('accepts exact recording IDs even when other metadata is sparse', () => {
+            expect(
+                scoreAlternateTrackCandidate(
+                    { recordingId: 'rec-1', title: 'Other' },
+                    { recordingId: 'rec-1', title: 'Target' }
+                )
+            ).toBe(300);
+        });
+
+        it('accepts exact title and artist when duration is unavailable', () => {
+            expect(
+                scoreAlternateTrackCandidate(
+                    {
+                        title: 'Marginalia #90',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 0,
+                    },
+                    {
+                        title: 'Marginalia #90',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 0,
+                    }
+                )
+            ).toBe(160);
+        });
+
+        it('requires close durations when both candidates provide them', () => {
+            const target = {
+                title: 'Marginalia #90',
+                artist: { name: 'Masayoshi Fujita' },
+                duration: 180,
+            };
+            expect(
+                scoreAlternateTrackCandidate(
+                    { title: 'Marginalia #90', artist: { name: 'Masayoshi Fujita' }, duration: 182 },
+                    target
+                )
+            ).toBe(190);
+            expect(
+                scoreAlternateTrackCandidate(
+                    { title: 'Marginalia #90', artist: { name: 'Masayoshi Fujita' }, duration: 220 },
+                    target
+                )
+            ).toBe(0);
+        });
+
+        it('rejects version-title differences without exact recording identity', () => {
+            expect(
+                scoreAlternateTrackCandidate(
+                    {
+                        title: 'Marginalia #90 (Live)',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 180,
+                    },
+                    {
+                        title: 'Marginalia #90',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 180,
+                    }
+                )
+            ).toBe(0);
+        });
+
+        it('matches non-Latin exact titles and artists', () => {
+            expect(
+                scoreAlternateTrackCandidate(
+                    { title: '琹の葉', artist: { name: 'イロノミ' }, duration: 0 },
+                    { title: '琹の葉', artist: { name: 'イロノミ' }, duration: 0 }
+                )
+            ).toBe(160);
+        });
+    });
+
     describe('extractTracksSuggestions', () => {
         it('builds suggestions including query term and tracks', () => {
             const tracks = [
@@ -317,9 +392,40 @@ describe('tracks-api module', () => {
             expect(stream).toMatchObject({
                 alternateTrackId: '999999999999999999',
                 originalTrackId: '245266990510825472',
-                matchScore: 175,
+                matchScore: 190,
                 exactIsrc: false,
+                durationVerified: true,
                 url: 'https://tracks.monochrome.st/track/999999999999999999',
+            });
+        });
+
+        it('uses an exact title and artist alternate when duration is unavailable', async () => {
+            vi.spyOn(api, 'searchTracks').mockResolvedValueOnce({
+                items: [
+                    {
+                        trackId: '999999999999999999',
+                        tracksTrackId: '999999999999999999',
+                        title: 'Marginalia #90',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 0,
+                    },
+                ],
+            });
+
+            const stream = await api.resolveAlternateTrackStream('194521912716636160', 'LOSSLESS', {
+                track: {
+                    id: '194521912716636160',
+                    title: 'Marginalia #90',
+                    artist: { name: 'Masayoshi Fujita' },
+                    duration: 0,
+                },
+            });
+
+            expect(stream).toMatchObject({
+                alternateTrackId: '999999999999999999',
+                originalTrackId: '194521912716636160',
+                matchScore: 160,
+                durationUnavailable: true,
             });
         });
 
