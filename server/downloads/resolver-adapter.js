@@ -334,7 +334,19 @@ export class MonochromeResolverFacade {
             excludeTrackId: trackId,
             signal,
         });
-        if (!stream?.url) return null;
+        if (!stream?.url) {
+            return stream?.unavailable
+                ? {
+                      alternateUnavailable: true,
+                      alternateSearchAttempted: Boolean(stream.alternateSearchAttempted),
+                      originalTrackId: stream.originalTrackId || String(trackId),
+                      alternateCandidatesConsidered: Number(stream.candidatesConsidered || 0),
+                      alternateBestMatchScore: Number(stream.bestMatchScore || 0),
+                      alternateReason: stream.reason || 'no-safe-alternate-match',
+                      alternateSearchError: stream.searchError || null,
+                  }
+                : null;
+        }
 
         const manifestDetails = inspectManifest(null);
         const presentationFlags = getPresentationFlags({
@@ -369,7 +381,11 @@ export class MonochromeResolverFacade {
             originalTrackId: stream.originalTrackId || String(trackId),
             alternateTrackId: stream.alternateTrackId || null,
             alternateMatchScore: stream.matchScore ?? null,
+            alternateExactRecordingId: Boolean(stream.exactRecordingId),
             alternateExactIsrc: Boolean(stream.exactIsrc),
+            alternateDurationVerified: Boolean(stream.durationVerified),
+            alternateDurationUnavailable: Boolean(stream.durationUnavailable),
+            alternateCandidatesConsidered: Number(stream.candidatesConsidered || 0),
         };
     }
 
