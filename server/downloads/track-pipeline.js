@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { getDownloadsConfig } from './config.js';
 import { createResolverAdapter, inspectManifest } from './resolver-adapter.js';
+import { noteCdnFailure, noteCdnSuccess, waitForCdnBackoff } from './cdn-backoff.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +23,6 @@ const BROWSER_LIKE_HEADERS = Object.freeze({
 const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
 const DOWNLOAD_TRANSFER_MAX_ATTEMPTS = 3;
-const DOWNLOAD_RETRY_BASE_DELAY_MS = 250;
 const DOWNLOAD_RETRY_AFTER_MAX_MS = 2 * 60 * 1000;
 
 function pipelineError(message, failureCode, details = {}) {
@@ -446,38 +446,6 @@ export function parseRetryAfterMs(value, now = Date.now()) {
     return Math.min(DOWNLOAD_RETRY_AFTER_MAX_MS, Math.max(0, date - now));
 }
 
-async function waitBeforeTransferRetry(attempt, signal, error, onProgress) {
-    if (signal?.aborted) {
-        throw signal.reason || new DOMException('Aborted', 'AbortError');
-    }
-
-    const retryAfterMs = parseRetryAfterMs(error?.retryAfter);
-    const waitMs = retryAfterMs ?? DOWNLOAD_RETRY_BASE_DELAY_MS * attempt;
-
-    onProgress?.({
-        retryWaitMs: waitMs,
-        retryWaitSeconds: Math.ceil(waitMs / 1000),
-        retryAttempt: attempt + 1,
-        retryStatus: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
-        retryAfter: error?.retryAfter || null,
-    });
-
-    await new Promise((resolve, reject) => {
-        let timer = null;
-        const finish = () => {
-            signal?.removeEventListener?.('abort', onAbort);
-            resolve();
-        };
-        const onAbort = () => {
-            clearTimeout(timer);
-            reject(signal.reason || new DOMException('Aborted', 'AbortError'));
-        };
-
-        timer = setTimeout(finish, waitMs);
-        signal?.addEventListener?.('abort', onAbort, { once: true });
-    });
-}
-
 async function rollbackPartialSegment(filePath, size, fsOps = fs) {
     if (size <= 0) {
         await fsOps.rm(filePath, { force: true }).catch(() => {});
@@ -574,7 +542,16 @@ async function writeResponseBodyToFile(
 async function downloadToTempFile(
     resolved,
     tempFile,
-    { fetchImpl = fetch, fsOps = fs, signal, env = {}, timeoutMs = 2 * 60 * 1000, onProgress = null } = {}
+    {
+        fetchImpl = fetch,
+        fsOps = fs,
+        signal,
+        env = {},
+        timeoutMs = 2 * 60 * 1000,
+        onProgress = null,
+        cdnBackoffBaseMs = 5000,
+        cdnBackoffMaxMs = 5 * 60 * 1000,
+    } = {}
 ) {
     const urls = resolveDownloadUrls(resolved);
     if (!urls.length) {
@@ -586,13 +563,14 @@ async function downloadToTempFile(
             index === 0 ? 0 : (await fsOps.stat(tempFile).catch(() => null))?.size || 0;
 
         for (let attempt = 1; attempt <= DOWNLOAD_TRANSFER_MAX_ATTEMPTS; attempt++) {
+            await waitForCdnBackoff(urls[index], { signal, onProgress });
+
             const timeoutController = new AbortController();
             const onAbort = () => timeoutController.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
             if (signal?.aborted) onAbort();
             else signal?.addEventListener('abort', onAbort, { once: true });
 
             let timeout = null;
-            let retryError = null;
             const armTimeout = () => {
                 clearTimeout(timeout);
                 timeout = setTimeout(() => {
@@ -625,6 +603,7 @@ async function downloadToTempFile(
                         });
                     },
                 });
+                noteCdnSuccess(urls[index]);
                 break;
             } catch (error) {
                 const context = {
@@ -649,6 +628,14 @@ async function downloadToTempFile(
                 await rollbackPartialSegment(tempFile, segmentStartSize, fsOps);
 
                 const retryable = isRetryableTransferError(error);
+                if (retryable) {
+                    noteCdnFailure(urls[index], {
+                        retryAfterMs: parseRetryAfterMs(error?.retryAfter),
+                        baseMs: cdnBackoffBaseMs,
+                        maxMs: cdnBackoffMaxMs,
+                    });
+                }
+
                 if (!retryable || attempt === DOWNLOAD_TRANSFER_MAX_ATTEMPTS) {
                     if (retryable && !error.failureCode) {
                         error.failureCode = 'CDN_FETCH_FAILED';
@@ -656,15 +643,11 @@ async function downloadToTempFile(
                     }
                     throw error;
                 }
-                retryError = error;
             } finally {
                 clearTimeout(timeout);
                 signal?.removeEventListener?.('abort', onAbort);
             }
 
-            if (retryError) {
-                await waitBeforeTransferRetry(attempt, signal, retryError, onProgress);
-            }
         }
     }
 }
@@ -698,7 +681,17 @@ async function decryptCencAudioFile(encryptedFile, outputFile, resolved, { fsOps
 async function downloadResolvedTrackToTemp(
     resolved,
     tempFile,
-    { jobTempDir, fetchImpl, fsOps, signal, env, timeoutMs, onProgress } = {}
+    {
+        jobTempDir,
+        fetchImpl,
+        fsOps,
+        signal,
+        env,
+        timeoutMs,
+        onProgress,
+        cdnBackoffBaseMs,
+        cdnBackoffMaxMs,
+    } = {}
 ) {
     if (resolved.decryptionKey) {
         const encryptedFile = path.join(jobTempDir, 'track.encrypted');
@@ -711,7 +704,16 @@ async function downloadResolvedTrackToTemp(
                 urls: [],
             },
             encryptedFile,
-            { fetchImpl, fsOps, signal, env, timeoutMs, onProgress }
+            {
+                fetchImpl,
+                fsOps,
+                signal,
+                env,
+                timeoutMs,
+                onProgress,
+                cdnBackoffBaseMs,
+                cdnBackoffMaxMs,
+            }
         );
         await decryptCencAudioFile(encryptedFile, tempFile, resolved, { fsOps });
         await fsOps.rm(encryptedFile, { force: true }).catch(() => {});
@@ -725,6 +727,8 @@ async function downloadResolvedTrackToTemp(
         env,
         timeoutMs,
         onProgress,
+        cdnBackoffBaseMs,
+        cdnBackoffMaxMs,
     });
 }
 
@@ -891,6 +895,12 @@ export async function executeTrackDownload({
                 env,
                 timeoutMs: config.fetchTimeoutMs,
                 onProgress,
+                cdnBackoffBaseMs:
+                    config.cdnBackoffBaseMs ??
+                    Number(process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS || 5000),
+                cdnBackoffMaxMs:
+                    config.cdnBackoffMaxMs ??
+                    Number(process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS || 5 * 60 * 1000),
             });
         } catch (primaryError) {
             if (
@@ -945,6 +955,12 @@ export async function executeTrackDownload({
                     env,
                     timeoutMs: config.fetchTimeoutMs,
                     onProgress,
+                    cdnBackoffBaseMs:
+                        config.cdnBackoffBaseMs ??
+                        Number(process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS || 5000),
+                    cdnBackoffMaxMs:
+                        config.cdnBackoffMaxMs ??
+                        Number(process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS || 5 * 60 * 1000),
                 });
                 resolved = alternate;
             } catch (alternateError) {
