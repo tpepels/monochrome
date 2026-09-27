@@ -905,6 +905,20 @@ export async function executeTrackDownload({
             const primaryUrl = resolved?.streamUrl || resolved?.sourceUrl || null;
             const alternateUrl = alternate?.streamUrl || alternate?.sourceUrl || null;
 
+            if (alternate?.alternateUnavailable) {
+                try {
+                    primaryError.originalTrackId = alternate.originalTrackId || String(id);
+                    primaryError.alternateSearchAttempted = Boolean(alternate.alternateSearchAttempted);
+                    primaryError.alternateCandidatesConsidered = Number(alternate.alternateCandidatesConsidered || 0);
+                    primaryError.alternateBestMatchScore = Number(alternate.alternateBestMatchScore || 0);
+                    primaryError.alternateReason = alternate.alternateReason || 'no-safe-alternate-match';
+                    primaryError.alternateSearchError = alternate.alternateSearchError || null;
+                } catch {
+                    // Preserve the primary transfer failure if it is non-extensible.
+                }
+                throw primaryError;
+            }
+
             if (!alternate || !alternateUrl || alternateUrl === primaryUrl) {
                 throw primaryError;
             }
@@ -915,7 +929,11 @@ export async function executeTrackDownload({
                 originalTrackId: alternate.originalTrackId || String(id),
                 alternateTrackId: alternate.alternateTrackId || null,
                 alternateMatchScore: alternate.alternateMatchScore ?? null,
+                alternateExactRecordingId: Boolean(alternate.alternateExactRecordingId),
                 alternateExactIsrc: Boolean(alternate.alternateExactIsrc),
+                alternateDurationVerified: Boolean(alternate.alternateDurationVerified),
+                alternateDurationUnavailable: Boolean(alternate.alternateDurationUnavailable),
+                alternateCandidatesConsidered: Number(alternate.alternateCandidatesConsidered || 0),
             });
 
             try {

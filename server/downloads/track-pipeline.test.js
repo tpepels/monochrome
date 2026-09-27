@@ -379,6 +379,57 @@ test('falls back to a strict alternate track stream after primary CDN retries ar
     expect(await fs.readFile(result.finalFile)).toEqual(audio);
 });
 
+test('records alternate search diagnostics when no safe fallback exists', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+
+    const resolver = {
+        async resolveTrackDownload() {
+            return resolvedTrack({
+                streamUrl: 'https://cdn.test/broken.wav',
+                sourceUrl: 'https://cdn.test/broken.wav',
+            });
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 4,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-safe-alternate-match',
+                alternateSearchError: null,
+            };
+        },
+    };
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            quality: 'LOSSLESS',
+            jobId: 'job-no-safe-alternate',
+            config,
+            resolver,
+            track: resolvedTrack().metadata,
+            fetchImpl: async () =>
+                new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                }),
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        originalTrackId: 'track1',
+        alternateSearchAttempted: true,
+        alternateCandidatesConsidered: 4,
+        alternateBestMatchScore: 0,
+        alternateReason: 'no-safe-alternate-match',
+    });
+});
+
 test('retries a mid-stream socket reset without duplicating partial bytes', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     let fetchCalls = 0;
