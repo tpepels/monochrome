@@ -903,6 +903,7 @@ export class MemoryDownloadQueue {
                     skipExistingComplete: config.duplicateCheckBeforeQueue,
                     album: job.album,
                     tracks: job.tracks,
+                    skipTrackIds: job.skippedTrackIds || [],
                     signal: controller.signal,
                     onProgress: (event) => this.updateAlbumProgress(job, event),
                 });
@@ -913,6 +914,51 @@ export class MemoryDownloadQueue {
             }
 
             const timestamp = nowIso();
+            if (result.partial) {
+                job.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+                job.result = {
+                    partial: true,
+                    action: result.action,
+                    stagingAlbumDir: result.stagingAlbumDir || null,
+                    finalAlbumDir: result.finalAlbumDir || null,
+                    relativePath: result.relativePath || null,
+                    missingTracks: Array.isArray(result.missingTracks) ? result.missingTracks : [],
+                    completedTracks: Number(result.completedTracks || 0),
+                    totalTracks: Number(result.totalTracks || 0),
+                    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+                    partialPublished: false,
+                    albumTitle: job.album?.title || job.album?.name || null,
+                };
+                job.missingTracks = job.result.missingTracks;
+                job.progress = {
+                    ...(job.progress || {}),
+                    percent:
+                        job.result.totalTracks > 0
+                            ? Math.round((job.result.completedTracks / job.result.totalTracks) * 100)
+                            : 0,
+                    message:
+                        'Partial - ' +
+                        job.result.completedTracks +
+                        '/' +
+                        job.result.totalTracks +
+                        ' tracks',
+                    phase: 'partial',
+                    currentTrack: null,
+                    completedTracks: job.result.completedTracks,
+                    totalTracks: job.result.totalTracks,
+                    missingTracks: job.result.missingTracks,
+                    failedTracks: job.result.missingTracks.map((item) => item.trackId),
+                };
+                job.error = null;
+                job.failureCode = null;
+                job.diagnostics = null;
+                job.retryable = true;
+                job.completedAt = null;
+                job.updatedAt = timestamp;
+                await this.persistJob(job);
+                return;
+            }
+
             job.status = DOWNLOAD_JOB_STATUSES.COMPLETED;
             job.result = {
                 action: result.action,
@@ -1051,6 +1097,7 @@ export class MemoryDownloadQueue {
             currentTrack: event.currentTrack || null,
             failedTrack: event.failedTrack || job.progress.failedTrack || null,
             failedTracks: Array.isArray(event.failedTracks) ? event.failedTracks : job.progress.failedTracks || [],
+            missingTracks: Array.isArray(event.missingTracks) ? event.missingTracks : job.progress.missingTracks || [],
             trackTransfer: event.trackTransfer || null,
             originalTrackId:
                 event.trackTransfer?.originalTrackId || job.progress.originalTrackId || null,
