@@ -19,6 +19,7 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain('Alternate search attempted');
     expect(html).toContain('Alternate candidates');
     expect(html).toContain('Alternate rejection');
+    expect(html).toContain('Alternate best score');
     expect(html).toContain('Error details');
     expect(html).toContain('Copy diagnostics');
     expect(html).toContain('diagnostic-json');
