@@ -8,6 +8,8 @@ import { onRequest as onDownloadsRequest } from '../../functions/api/downloads/i
 import { onRequest as onJobRequest } from '../../functions/api/downloads/[jobId].js';
 import { onRequest as onCancelRequest } from '../../functions/api/downloads/[jobId]/cancel.js';
 import { onRequest as onRetryRequest } from '../../functions/api/downloads/[jobId]/retry.js';
+import { onRequest as onSkipTrackRequest } from '../../functions/api/downloads/[jobId]/skip-track.js';
+import { onRequest as onPublishPartialRequest } from '../../functions/api/downloads/[jobId]/publish-partial.js';
 import { onRequest as onResetRequest } from '../../functions/api/downloads/reset.js';
 import { onRequest as onRetryFailedRequest } from '../../functions/api/downloads/retry-failed.js';
 import { onRequest as onResumeCancelledRequest } from '../../functions/api/downloads/resume-cancelled.js';
@@ -180,6 +182,72 @@ describe('server download API', () => {
         const snapshot = await downloadQueue.snapshot(config);
         expect(snapshot.jobs).toHaveLength(1);
         expect(snapshot.counts.queued).toBe(1);
+    });
+
+    test('skip-track API requeues a failed album with the current track marked unavailable', async () => {
+        const config = getDownloadsConfig(context({}).env);
+        const queued = await downloadQueue.enqueue(
+            {
+                type: 'album',
+                id: 'skip-api-album',
+                quality: 'LOSSLESS',
+                album: { id: 'skip-api-album', title: 'Skip API Album' },
+                tracks: [
+                    { id: 't1', title: 'One', trackNumber: 1 },
+                    { id: 't2', title: 'Two', trackNumber: 2 },
+                ],
+            },
+            config
+        );
+        const internal = downloadQueue.memoryQueue.jobs.get(queued.jobId);
+        internal.status = 'failed';
+        internal.retryable = true;
+        internal.progress = {
+            percent: 50,
+            message: 'Failed',
+            phase: 'failed',
+            totalTracks: 2,
+            completedTracks: 1,
+            failedTrack: 't2',
+            currentTrack: 't2',
+        };
+
+        const response = await onSkipTrackRequest(
+            context(
+                new Request('https://example.test/api/downloads/' + queued.jobId + '/skip-track', {
+                    method: 'POST',
+                }),
+                { jobId: queued.jobId }
+            )
+        );
+        const body = await response.json();
+
+        expect(response.status).toBe(202);
+        expect(body.job).toMatchObject({
+            jobId: queued.jobId,
+            status: 'queued',
+            skippedTrackIds: ['t2'],
+        });
+    });
+
+    test('publish-partial API rejects jobs that are not partial', async () => {
+        const queued = await downloadQueue.enqueue(
+            { type: 'album', id: 'not-partial', quality: 'LOSSLESS' },
+            getDownloadsConfig(context({}).env)
+        );
+
+        const response = await onPublishPartialRequest(
+            context(
+                new Request('https://example.test/api/downloads/' + queued.jobId + '/publish-partial', {
+                    method: 'POST',
+                }),
+                { jobId: queued.jobId }
+            )
+        );
+        const body = await response.json();
+
+        expect(response.status).toBe(409);
+        expect(body.failureCode).toBe('PARTIAL_ALBUM_NOT_PUBLISHABLE');
     });
 
     test('resets the queue through the API', async () => {

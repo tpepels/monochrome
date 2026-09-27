@@ -3,6 +3,8 @@ import { onRequest as downloadsRequest } from '../functions/api/downloads/index.
 import { onRequest as downloadJobRequest } from '../functions/api/downloads/[jobId].js';
 import { onRequest as cancelDownloadRequest } from '../functions/api/downloads/[jobId]/cancel.js';
 import { onRequest as retryDownloadRequest } from '../functions/api/downloads/[jobId]/retry.js';
+import { onRequest as skipTrackDownloadRequest } from '../functions/api/downloads/[jobId]/skip-track.js';
+import { onRequest as publishPartialDownloadRequest } from '../functions/api/downloads/[jobId]/publish-partial.js';
 import { onRequest as resetDownloadsRequest } from '../functions/api/downloads/reset.js';
 import { onRequest as retryFailedDownloadsRequest } from '../functions/api/downloads/retry-failed.js';
 import { onRequest as resumeCancelledDownloadsRequest } from '../functions/api/downloads/resume-cancelled.js';
@@ -81,6 +83,8 @@ async function handleApi(request) {
         context.params.jobId = decodeURIComponent(parts[2]);
         if (parts[3] === 'cancel') return cancelDownloadRequest(context);
         if (parts[3] === 'retry') return retryDownloadRequest(context);
+        if (parts[3] === 'skip-track') return skipTrackDownloadRequest(context);
+        if (parts[3] === 'publish-partial') return publishPartialDownloadRequest(context);
     }
 
     return notFound();

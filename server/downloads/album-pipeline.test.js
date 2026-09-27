@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { executeAlbumDownload, InMemoryPublishLock } from './album-pipeline.js';
+import { executeAlbumDownload, InMemoryPublishLock, publishPartialAlbum } from './album-pipeline.js';
 import { executeTrackDownload } from './track-pipeline.js';
 
 let root;
@@ -76,6 +76,10 @@ function coverFetch() {
         }
         return new Response('missing', { status: 404 });
     };
+}
+
+async function noOpMetadataEmbedder() {
+    return { embedded: true, method: 'test' };
 }
 
 function wavBuffer({ durationSeconds = 2, sampleRate = 8000 } = {}) {
@@ -465,6 +469,76 @@ test('one failed track preserves staging and leaves no final album directory', a
     await expect(
         fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-fail'))
     ).resolves.toBeTruthy();
+});
+
+test('skips unavailable tracks, stages a partial album, publishes it, and later completes it', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const jobId = 'job-partial';
+    const resolver = albumResolverWithTrackMetadataMismatch();
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    const fetchImpl = async (url) => {
+        if (String(url) === 'https://cdn.test/t1.wav' || String(url) === 'https://cdn.test/t2.wav') {
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        }
+        return coverFetch()(url);
+    };
+
+    const partial = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: executeTrackDownload,
+        fetchImpl,
+        metadataEmbedder: noOpMetadataEmbedder,
+        publishLock: new InMemoryPublishLock(),
+        skipTrackIds: ['t2'],
+    });
+
+    expect(partial).toMatchObject({
+        partial: true,
+        action: 'partial-staged',
+        completedTracks: 1,
+        totalTracks: 2,
+        missingTracks: [{ trackId: 't2', title: 'Two' }],
+    });
+    await expect(fs.stat(finalAlbumDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(partial.stagingAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+
+    const publication = await publishPartialAlbum({
+        stagingAlbumDir: partial.stagingAlbumDir,
+        finalAlbumDir: partial.finalAlbumDir,
+        albumName: 'Album Title',
+        jobId,
+        publishLock: new InMemoryPublishLock(),
+    });
+    expect(publication.action).toBe('published');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const secondRunFetches = [];
+    const completed = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: executeTrackDownload,
+        fetchImpl: async (url) => {
+            if (String(url).startsWith('https://cdn.test/')) secondRunFetches.push(String(url));
+            return fetchImpl(url);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(completed.partial).toBeUndefined();
+    expect(completed.action).toBe('replaced');
+    expect(secondRunFetches).toEqual(['https://cdn.test/t2.wav']);
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
 });
 
 test('fails fast on an exhausted track and reuses prior staged tracks on retry', async () => {

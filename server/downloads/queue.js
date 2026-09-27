@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDownloadsConfig, publicConfig } from './config.js';
 import { defaultMaintenanceLock, RedisMaintenanceLock, sweepDownloadTransients } from './maintenance.js';
-import { executeAlbumDownload } from './album-pipeline.js';
+import { executeAlbumDownload, publishPartialAlbum } from './album-pipeline.js';
 import { executeTrackDownload } from './track-pipeline.js';
 
 export const DOWNLOAD_JOB_STATUSES = Object.freeze({
@@ -11,12 +11,14 @@ export const DOWNLOAD_JOB_STATUSES = Object.freeze({
     PAUSED: 'paused',
     COMPLETED: 'completed',
     FAILED: 'failed',
+    PARTIAL: 'partial',
     CANCELLED: 'cancelled',
 });
 
 const TERMINAL_STATUSES = new Set([
     DOWNLOAD_JOB_STATUSES.COMPLETED,
     DOWNLOAD_JOB_STATUSES.FAILED,
+    DOWNLOAD_JOB_STATUSES.PARTIAL,
     DOWNLOAD_JOB_STATUSES.CANCELLED,
 ]);
 
@@ -231,6 +233,9 @@ function summarizeJob(job) {
         cancelReason: job.cancelReason || null,
         requeuedAsJobId: job.requeuedAsJobId || null,
         requeuedAt: job.requeuedAt || null,
+        skippedTrackIds: Array.isArray(job.skippedTrackIds) ? job.skippedTrackIds : [],
+        missingTracks: Array.isArray(job.missingTracks) ? job.missingTracks : [],
+        partialPublishedAt: job.partialPublishedAt || null,
     };
 }
 
@@ -300,6 +305,11 @@ function createJob(payload, overrides = {}) {
         cancelReason: null,
         requeuedAsJobId: null,
         requeuedAt: null,
+        restartMessage: null,
+        restartPreserveSkippedTracks: false,
+        skippedTrackIds: [],
+        missingTracks: [],
+        partialPublishedAt: null,
         attempts: overrides.attempts || 0,
     };
 }
@@ -495,7 +505,7 @@ export class MemoryDownloadQueue {
             .find(
                 (job) =>
                     job &&
-                    !TERMINAL_STATUSES.has(job.status) &&
+                    (!TERMINAL_STATUSES.has(job.status) || job.status === DOWNLOAD_JOB_STATUSES.PARTIAL) &&
                     job.type === payload.type &&
                     job.id === payload.id &&
                     job.quality === payload.quality
@@ -558,7 +568,7 @@ export class MemoryDownloadQueue {
         return summarizeJob(job);
     }
 
-    resetJobForRetry(job, message = 'Queued for retry') {
+    resetJobForRetry(job, message = 'Queued for retry', { preserveSkippedTracks = false } = {}) {
         const timestamp = nowIso();
         job.status = DOWNLOAD_JOB_STATUSES.QUEUED;
         job.progress = baseProgress(message);
@@ -576,6 +586,12 @@ export class MemoryDownloadQueue {
         job.requeuedAsJobId = null;
         job.requeuedAt = null;
         job.restartRequested = false;
+        if (!preserveSkippedTracks) {
+            job.restartMessage = null;
+            job.restartPreserveSkippedTracks = false;
+            job.skippedTrackIds = [];
+            job.missingTracks = [];
+        }
         job.updatedAt = timestamp;
     }
 
@@ -587,11 +603,18 @@ export class MemoryDownloadQueue {
         return true;
     }
 
-    async requeueInPlace(job, config = this.lastConfig, message = 'Queued for retry') {
+    async requeueInPlace(
+        job,
+        config = this.lastConfig,
+        message = 'Queued for retry',
+        { preserveSkippedTracks = false } = {}
+    ) {
         if (!job || !TERMINAL_STATUSES.has(job.status)) return job ? summarizeJob(job) : null;
 
         if (this.activeControllers.has(job.jobId)) {
             job.restartRequested = true;
+            job.restartMessage = message;
+            job.restartPreserveSkippedTracks = Boolean(preserveSkippedTracks);
             job.progress = {
                 ...(job.progress || {}),
                 message: 'Restart requested; waiting for current worker to stop',
@@ -601,7 +624,7 @@ export class MemoryDownloadQueue {
             return summarizeJob(job);
         }
 
-        this.resetJobForRetry(job, message);
+        this.resetJobForRetry(job, message, { preserveSkippedTracks });
         const moved = this.moveJobToBack(job.jobId);
         await this.persistJob(job);
         if (moved) await this.persistOrder();
@@ -612,11 +635,88 @@ export class MemoryDownloadQueue {
     async retry(jobId, config = this.lastConfig) {
         await this.compactDuplicates();
         const existing = this.jobs.get(jobId);
-        if (!existing || existing.status !== DOWNLOAD_JOB_STATUSES.FAILED || !existing.retryable) {
+        if (
+            !existing ||
+            ![DOWNLOAD_JOB_STATUSES.FAILED, DOWNLOAD_JOB_STATUSES.PARTIAL].includes(existing.status) ||
+            !existing.retryable
+        ) {
             return null;
         }
 
         return this.requeueInPlace(existing, config, 'Queued for retry');
+    }
+
+    async skipFailedTrack(jobId, config = this.lastConfig) {
+        await this.compactDuplicates();
+        const job = this.jobs.get(jobId);
+        if (!job || job.type !== 'album' || job.status !== DOWNLOAD_JOB_STATUSES.FAILED) return null;
+
+        const failedTrackId = job.progress?.failedTrack || job.progress?.currentTrack;
+        if (!failedTrackId) return null;
+
+        const skipped = new Set((job.skippedTrackIds || []).map((value) => String(value)));
+        skipped.add(String(failedTrackId));
+        job.skippedTrackIds = [...skipped];
+        job.missingTracks = (job.tracks || [])
+            .map((track, index) => ({ track, index }))
+            .filter(({ track }) => skipped.has(String(track?.id)))
+            .map(({ track, index }) => ({
+                trackId: String(track.id),
+                title: track.title || track.name || null,
+                trackNumber: track.trackNumber || track.number || index + 1,
+                discNumber: track.volumeNumber || track.discNumber || 1,
+            }));
+
+        return this.requeueInPlace(
+            job,
+            config,
+            'Queued to continue with unavailable track skipped',
+            { preserveSkippedTracks: true }
+        );
+    }
+
+    async publishPartial(jobId, config = this.lastConfig) {
+        await this.compactDuplicates();
+        const job = this.jobs.get(jobId);
+        if (
+            !job ||
+            job.type !== 'album' ||
+            job.status !== DOWNLOAD_JOB_STATUSES.PARTIAL ||
+            !job.result?.partial
+        ) {
+            return null;
+        }
+        if (job.result.partialPublished) return summarizeJob(job);
+
+        const publication = await publishPartialAlbum({
+            stagingAlbumDir: job.result.stagingAlbumDir,
+            finalAlbumDir: job.result.finalAlbumDir,
+            albumName: job.album?.title || job.album?.name || job.result.albumTitle || ('Album ' + job.id),
+            jobId: job.jobId,
+            publishLock: this.maintenanceLock,
+        });
+
+        const timestamp = nowIso();
+        job.result = {
+            ...job.result,
+            ...publication,
+            action: 'partial-published',
+            partialPublished: true,
+        };
+        job.partialPublishedAt = timestamp;
+        job.progress = {
+            ...job.progress,
+            message:
+                'Partial - ' +
+                Number(job.result.completedTracks || 0) +
+                '/' +
+                Number(job.result.totalTracks || 0) +
+                ' tracks · in library',
+            phase: 'partial',
+        };
+        job.updatedAt = timestamp;
+        await this.persistJob(job);
+        return summarizeJob(job);
     }
 
     async requeueAll(status, config = this.lastConfig) {
@@ -705,7 +805,10 @@ export class MemoryDownloadQueue {
     activeJobIds() {
         return this.order.filter((jobId) => {
             const job = this.jobs.get(jobId);
-            return job && !TERMINAL_STATUSES.has(job.status);
+            return (
+                job &&
+                (!TERMINAL_STATUSES.has(job.status) || job.status === DOWNLOAD_JOB_STATUSES.PARTIAL)
+            );
         });
     }
 
@@ -771,10 +874,13 @@ export class MemoryDownloadQueue {
                 this.activeControllers.delete(job.jobId);
 
                 if (job.restartRequested && TERMINAL_STATUSES.has(job.status)) {
-                    this.resetJobForRetry(
-                        job,
-                        job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry'
-                    );
+                    const restartMessage =
+                        job.restartMessage ||
+                        (job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry');
+                    const preserveSkippedTracks = Boolean(job.restartPreserveSkippedTracks);
+                    this.resetJobForRetry(job, restartMessage, { preserveSkippedTracks });
+                    job.restartMessage = null;
+                    job.restartPreserveSkippedTracks = false;
                     const moved = this.moveJobToBack(job.jobId);
                     await this.persistJob(job);
                     if (moved) await this.persistOrder();
@@ -810,6 +916,7 @@ export class MemoryDownloadQueue {
                     skipExistingComplete: config.duplicateCheckBeforeQueue,
                     album: job.album,
                     tracks: job.tracks,
+                    skipTrackIds: job.skippedTrackIds || [],
                     signal: controller.signal,
                     onProgress: (event) => this.updateAlbumProgress(job, event),
                 });
@@ -820,6 +927,52 @@ export class MemoryDownloadQueue {
             }
 
             const timestamp = nowIso();
+            if (result.partial) {
+                job.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+                job.result = {
+                    partial: true,
+                    action: result.action,
+                    stagingAlbumDir: result.stagingAlbumDir || null,
+                    finalAlbumDir: result.finalAlbumDir || null,
+                    relativePath: result.relativePath || null,
+                    missingTracks: Array.isArray(result.missingTracks) ? result.missingTracks : [],
+                    completedTracks: Number(result.completedTracks || 0),
+                    totalTracks: Number(result.totalTracks || 0),
+                    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+                    partialPublished: false,
+                    previousPartialPublishedAt: job.partialPublishedAt || null,
+                    albumTitle: job.album?.title || job.album?.name || null,
+                };
+                job.missingTracks = job.result.missingTracks;
+                job.progress = {
+                    ...(job.progress || {}),
+                    percent:
+                        job.result.totalTracks > 0
+                            ? Math.round((job.result.completedTracks / job.result.totalTracks) * 100)
+                            : 0,
+                    message:
+                        'Partial - ' +
+                        job.result.completedTracks +
+                        '/' +
+                        job.result.totalTracks +
+                        ' tracks',
+                    phase: 'partial',
+                    currentTrack: null,
+                    completedTracks: job.result.completedTracks,
+                    totalTracks: job.result.totalTracks,
+                    missingTracks: job.result.missingTracks,
+                    failedTracks: job.result.missingTracks.map((item) => item.trackId),
+                };
+                job.error = null;
+                job.failureCode = null;
+                job.diagnostics = null;
+                job.retryable = true;
+                job.completedAt = null;
+                job.updatedAt = timestamp;
+                await this.persistJob(job);
+                return;
+            }
+
             job.status = DOWNLOAD_JOB_STATUSES.COMPLETED;
             job.result = {
                 action: result.action,
@@ -834,6 +987,7 @@ export class MemoryDownloadQueue {
             job.failureCode = null;
             job.diagnostics = null;
             job.retryable = false;
+            job.partialPublishedAt = null;
             job.completedAt = timestamp;
             job.updatedAt = timestamp;
             await this.persistJob(job);
@@ -958,6 +1112,7 @@ export class MemoryDownloadQueue {
             currentTrack: event.currentTrack || null,
             failedTrack: event.failedTrack || job.progress.failedTrack || null,
             failedTracks: Array.isArray(event.failedTracks) ? event.failedTracks : job.progress.failedTracks || [],
+            missingTracks: Array.isArray(event.missingTracks) ? event.missingTracks : job.progress.missingTracks || [],
             trackTransfer: event.trackTransfer || null,
             originalTrackId:
                 event.trackTransfer?.originalTrackId || job.progress.originalTrackId || null,
@@ -1137,6 +1292,16 @@ export class RedisDownloadQueue extends MemoryDownloadQueue {
         return super.retry(jobId, config);
     }
 
+    async skipFailedTrack(jobId, config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.skipFailedTrack(jobId, config);
+    }
+
+    async publishPartial(jobId, config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.publishPartial(jobId, config);
+    }
+
     async retryAllFailed(config = this.lastConfig) {
         await this.hydrateFromRedis();
         return super.retryAllFailed(config);
@@ -1259,6 +1424,16 @@ export class DownloadQueueManager {
     async retry(jobId, config) {
         const backend = await this.backendFor(config);
         return backend.retry(jobId, config);
+    }
+
+    async skipFailedTrack(jobId, config) {
+        const backend = await this.backendFor(config);
+        return backend.skipFailedTrack(jobId, config);
+    }
+
+    async publishPartial(jobId, config) {
+        const backend = await this.backendFor(config);
+        return backend.publishPartial(jobId, config);
     }
 
     async retryAllFailed(config) {

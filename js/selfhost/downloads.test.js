@@ -207,6 +207,61 @@ describe('self-host download bridge', () => {
         });
     });
 
+    it('treats a partial server album as inactive but unresolved', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        success: true,
+                        jobId: 'job-partial-album',
+                        job: {
+                            jobId: 'job-partial-album',
+                            status: 'queued',
+                            progress: { percent: 0, totalTracks: 2, completedTracks: 0 },
+                        },
+                    }),
+                    { status: 200, headers: { 'content-type': 'application/json' } }
+                )
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        success: true,
+                        job: {
+                            jobId: 'job-partial-album',
+                            status: 'partial',
+                            progress: { percent: 50, totalTracks: 2, completedTracks: 1 },
+                        },
+                    }),
+                    { status: 200, headers: { 'content-type': 'application/json' } }
+                )
+            );
+        vi.stubGlobal('fetch', fetchMock);
+
+        const ui = makeUi();
+        const bridge = createSelfHostDownloadBridge(ui);
+        await expect(
+            bridge.tryQueueAlbum(
+                { id: 'partial-album', title: 'Partial Album' },
+                [
+                    { id: 'track-1', title: 'One' },
+                    { id: 'track-2', title: 'Two' },
+                ],
+                'LOSSLESS'
+            )
+        ).resolves.toBe(true);
+
+        await vi.waitFor(() => {
+            expect(ui.completeBulkDownload).toHaveBeenCalledWith(
+                expect.any(HTMLElement),
+                true,
+                'Partial - 1/2 tracks',
+                { failedTracks: 1, totalTracks: 2 }
+            );
+        });
+    });
+
     it('queues a server track using the bridge and reports completion through upstream UI callbacks', async () => {
         const fetchMock = vi
             .fn()

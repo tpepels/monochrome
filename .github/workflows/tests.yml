@@ -50,4 +50,5 @@ jobs:
                   --exclude "server/downloads/**/*.test.js"
 
             - name: Run self-host server tests
+              if: ${{ always() }}
               run: bunx vitest run --config=vitest.server.config.ts

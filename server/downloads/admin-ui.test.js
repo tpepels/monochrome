@@ -14,6 +14,11 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain("runBulkAction('resume-cancelled')");
     expect(html).toContain('Retry all failed');
     expect(html).toContain('Resume all cancelled');
+    expect(html).toContain('Skip track + continue');
+    expect(html).toContain('Publish partial');
+    expect(html).toContain('Retry missing');
+    expect(html).toContain("runJobAction(button, 'skip-track')");
+    expect(html).toContain("runJobAction(button, 'publish-partial')");
     expect(html).not.toContain('http://192.168.1.200:4545/');
     expect(html).toContain('Cause code');
     expect(html).toContain('Alternate search attempted');

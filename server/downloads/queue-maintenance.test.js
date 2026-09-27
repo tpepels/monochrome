@@ -107,6 +107,39 @@ test('failed retryability follows failure category and retry reuses the same job
     expect(retry.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
 });
 
+test('skip intent survives a restart request while the failed worker is still unwinding', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'skip-race',
+            quality: 'LOSSLESS',
+            tracks: [{ id: 'broken', title: 'Broken', trackNumber: 1 }],
+        },
+        cfg
+    );
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 'broken', currentTrack: 'broken' };
+    queue.activeControllers.set(queued.jobId, new AbortController());
+
+    const requested = await queue.skipFailedTrack(queued.jobId, cfg);
+
+    expect(requested.skippedTrackIds).toEqual(['broken']);
+    expect(internal.restartRequested).toBe(true);
+    expect(internal.restartPreserveSkippedTracks).toBe(true);
+    expect(internal.restartMessage).toBe('Queued to continue with unavailable track skipped');
+
+    queue.activeControllers.delete(queued.jobId);
+    queue.resetJobForRetry(internal, internal.restartMessage, {
+        preserveSkippedTracks: internal.restartPreserveSkippedTracks,
+    });
+
+    expect(queue.get(queued.jobId).skippedTrackIds).toEqual(['broken']);
+});
+
 test('retry keeps the same job but moves it behind already queued work', async () => {
     const cfg = config({ workerEnabled: false });
     const queue = new MemoryDownloadQueue({ persistToDisk: false });
@@ -148,6 +181,188 @@ test('resuming a cancelled job also moves it behind already queued work', async 
     expect(queue.order).toEqual([queued.jobId, cancelled.jobId]);
 });
 
+test('skip failed track continues the same album job with the track recorded as unavailable', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'partial-album',
+            quality: 'LOSSLESS',
+            album: { id: 'partial-album', title: 'Partial Album' },
+            tracks: [
+                { id: 't1', title: 'One', trackNumber: 1 },
+                { id: 't2', title: 'Two', trackNumber: 2 },
+            ],
+        },
+        cfg
+    );
+
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = {
+        percent: 50,
+        message: 'Failed',
+        phase: 'failed',
+        totalTracks: 2,
+        completedTracks: 1,
+        failedTrack: 't2',
+        currentTrack: 't2',
+    };
+
+    const continued = await queue.skipFailedTrack(queued.jobId, cfg);
+
+    expect(continued.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
+    expect(continued.skippedTrackIds).toEqual(['t2']);
+    expect(continued.missingTracks).toEqual([
+        expect.objectContaining({ trackId: 't2', title: 'Two', trackNumber: 2 }),
+    ]);
+    expect(continued.jobId).toBe(queued.jobId);
+});
+
+test('skipping multiple failed tracks accumulates the unavailable set', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'multi-skip',
+            quality: 'LOSSLESS',
+            album: { id: 'multi-skip', title: 'Multi Skip' },
+            tracks: [
+                { id: 't1', title: 'One', trackNumber: 1 },
+                { id: 't2', title: 'Two', trackNumber: 2 },
+                { id: 't3', title: 'Three', trackNumber: 3 },
+            ],
+        },
+        cfg
+    );
+
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 't1', currentTrack: 't1' };
+
+    await queue.skipFailedTrack(queued.jobId, cfg);
+
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 't3', currentTrack: 't3' };
+
+    const continued = await queue.skipFailedTrack(queued.jobId, cfg);
+
+    expect(continued.skippedTrackIds).toEqual(['t1', 't3']);
+    expect(continued.missingTracks.map((track) => track.trackId)).toEqual(['t1', 't3']);
+    expect(continued.missingTracks.map((track) => track.trackNumber)).toEqual([1, 3]);
+});
+
+test('partial album can be published without completing the queue item and retried later', async () => {
+    const cfg = config();
+    const queue = new MemoryDownloadQueue({
+        persistToDisk: false,
+        albumExecutor: async ({ jobId, config: jobConfig }) => {
+            const stagingAlbumDir = path.join(
+                jobConfig.downloadRoot,
+                '.monochrome-staging',
+                jobId,
+                'staging',
+                'Artist',
+                'Album'
+            );
+            const finalAlbumDir = path.join(jobConfig.downloadRoot, 'Artist', 'Album');
+            await fs.mkdir(stagingAlbumDir, { recursive: true });
+            await fs.writeFile(path.join(stagingAlbumDir, '01 - One.flac'), 'one');
+            return {
+                partial: true,
+                action: 'partial-staged',
+                stagingAlbumDir,
+                finalAlbumDir,
+                relativePath: path.join('Artist', 'Album'),
+                missingTracks: [{ trackId: 't2', title: 'Two', trackNumber: 2, discNumber: 1 }],
+                completedTracks: 1,
+                totalTracks: 2,
+                warnings: [],
+            };
+        },
+    });
+
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'publish-partial',
+            quality: 'LOSSLESS',
+            album: { id: 'publish-partial', title: 'Album', artist: { name: 'Artist' } },
+            tracks: [
+                { id: 't1', title: 'One', trackNumber: 1 },
+                { id: 't2', title: 'Two', trackNumber: 2 },
+            ],
+        },
+        cfg
+    );
+    await queue.waitForIdleForTests();
+
+    const partial = queue.get(queued.jobId);
+    expect(partial.status).toBe(DOWNLOAD_JOB_STATUSES.PARTIAL);
+    expect(partial.retryable).toBe(true);
+    expect(partial.progress.message).toBe('Partial - 1/2 tracks');
+    expect(partial.result).toMatchObject({
+        partial: true,
+        partialPublished: false,
+        completedTracks: 1,
+        totalTracks: 2,
+    });
+
+    const published = await queue.publishPartial(queued.jobId, cfg);
+    expect(published.status).toBe(DOWNLOAD_JOB_STATUSES.PARTIAL);
+    expect(published.result.partialPublished).toBe(true);
+    expect(published.progress.message).toBe('Partial - 1/2 tracks · in library');
+    await expect(fs.stat(path.join(cfg.downloadRoot, 'Artist', 'Album', '01 - One.flac'))).resolves.toBeTruthy();
+
+    const retried = await queue.retry(queued.jobId, config({ workerEnabled: false }));
+    expect(retried.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
+    expect(retried.skippedTrackIds).toEqual([]);
+    expect(retried.missingTracks).toEqual([]);
+    expect(retried.partialPublishedAt).toBeTruthy();
+});
+
+test('a partial album remains the canonical row for duplicate enqueue requests', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const first = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'canonical-partial',
+            quality: 'LOSSLESS',
+            album: { id: 'canonical-partial', title: 'Canonical Partial' },
+        },
+        cfg
+    );
+    const internal = queue.jobs.get(first.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+    internal.retryable = true;
+    internal.result = {
+        partial: true,
+        missingTracks: [{ trackId: 't2', title: 'Two' }],
+        completedTracks: 1,
+        totalTracks: 2,
+    };
+
+    const second = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'canonical-partial',
+            quality: 'LOSSLESS',
+            album: { id: 'canonical-partial', title: 'Canonical Partial' },
+        },
+        cfg
+    );
+
+    expect(second.jobId).toBe(first.jobId);
+    expect(second.status).toBe(DOWNLOAD_JOB_STATUSES.PARTIAL);
+    expect(queue.order).toEqual([first.jobId]);
+});
+
 test('optional duplicate check can complete a job before worker execution', async () => {
     const relativePath = path.join('Artist', 'Album', '01 - Song.wav');
     await fs.mkdir(path.join(root, 'music', 'Artist', 'Album'), { recursive: true });
@@ -168,6 +383,27 @@ test('optional duplicate check can complete a job before worker execution', asyn
     expect(job.status).toBe(DOWNLOAD_JOB_STATUSES.COMPLETED);
     expect(job.result.action).toBe('skipped-duplicate-before-queue');
     expect(executed).toBe(false);
+});
+
+test('partial album staging remains protected from maintenance sweeps', async () => {
+    const cfg = config({ workerEnabled: false, transientMinAgeMs: 0 });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        { type: 'album', id: 'protected-partial', quality: 'LOSSLESS' },
+        cfg
+    );
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+    internal.retryable = true;
+
+    const stagingDir = path.join(cfg.downloadRoot, '.monochrome-staging', queued.jobId);
+    await fs.mkdir(stagingDir, { recursive: true });
+    await fs.writeFile(path.join(stagingDir, 'marker'), 'keep');
+
+    await queue.sweep(cfg, { minAgeMs: 0, dryRun: false });
+
+    await expect(fs.stat(stagingDir)).resolves.toBeTruthy();
+    expect(queue.activeJobIds()).toContain(queued.jobId);
 });
 
 test('hard queue reset removes transient data but preserves completed music', async () => {
