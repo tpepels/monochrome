@@ -799,7 +799,10 @@ export class MemoryDownloadQueue {
     activeJobIds() {
         return this.order.filter((jobId) => {
             const job = this.jobs.get(jobId);
-            return job && !TERMINAL_STATUSES.has(job.status);
+            return (
+                job &&
+                (!TERMINAL_STATUSES.has(job.status) || job.status === DOWNLOAD_JOB_STATUSES.PARTIAL)
+            );
         });
     }
 
