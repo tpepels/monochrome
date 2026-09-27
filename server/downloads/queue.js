@@ -566,7 +566,7 @@ export class MemoryDownloadQueue {
         return summarizeJob(job);
     }
 
-    resetJobForRetry(job, message = 'Queued for retry') {
+    resetJobForRetry(job, message = 'Queued for retry', { preserveSkippedTracks = false } = {}) {
         const timestamp = nowIso();
         job.status = DOWNLOAD_JOB_STATUSES.QUEUED;
         job.progress = baseProgress(message);
@@ -584,6 +584,10 @@ export class MemoryDownloadQueue {
         job.requeuedAsJobId = null;
         job.requeuedAt = null;
         job.restartRequested = false;
+        if (!preserveSkippedTracks) {
+            job.skippedTrackIds = [];
+            job.missingTracks = [];
+        }
         job.updatedAt = timestamp;
     }
 
@@ -595,7 +599,12 @@ export class MemoryDownloadQueue {
         return true;
     }
 
-    async requeueInPlace(job, config = this.lastConfig, message = 'Queued for retry') {
+    async requeueInPlace(
+        job,
+        config = this.lastConfig,
+        message = 'Queued for retry',
+        { preserveSkippedTracks = false } = {}
+    ) {
         if (!job || !TERMINAL_STATUSES.has(job.status)) return job ? summarizeJob(job) : null;
 
         if (this.activeControllers.has(job.jobId)) {
@@ -609,7 +618,7 @@ export class MemoryDownloadQueue {
             return summarizeJob(job);
         }
 
-        this.resetJobForRetry(job, message);
+        this.resetJobForRetry(job, message, { preserveSkippedTracks });
         const moved = this.moveJobToBack(job.jobId);
         await this.persistJob(job);
         if (moved) await this.persistOrder();
