@@ -629,11 +629,87 @@ export class MemoryDownloadQueue {
     async retry(jobId, config = this.lastConfig) {
         await this.compactDuplicates();
         const existing = this.jobs.get(jobId);
-        if (!existing || existing.status !== DOWNLOAD_JOB_STATUSES.FAILED || !existing.retryable) {
+        if (
+            !existing ||
+            ![DOWNLOAD_JOB_STATUSES.FAILED, DOWNLOAD_JOB_STATUSES.PARTIAL].includes(existing.status) ||
+            !existing.retryable
+        ) {
             return null;
         }
 
         return this.requeueInPlace(existing, config, 'Queued for retry');
+    }
+
+    async skipFailedTrack(jobId, config = this.lastConfig) {
+        await this.compactDuplicates();
+        const job = this.jobs.get(jobId);
+        if (!job || job.type !== 'album' || job.status !== DOWNLOAD_JOB_STATUSES.FAILED) return null;
+
+        const failedTrackId = job.progress?.failedTrack || job.progress?.currentTrack;
+        if (!failedTrackId) return null;
+
+        const skipped = new Set((job.skippedTrackIds || []).map((value) => String(value)));
+        skipped.add(String(failedTrackId));
+        job.skippedTrackIds = [...skipped];
+        job.missingTracks = (job.tracks || [])
+            .filter((track) => skipped.has(String(track?.id)))
+            .map((track, index) => ({
+                trackId: String(track.id),
+                title: track.title || track.name || null,
+                trackNumber: track.trackNumber || track.number || index + 1,
+                discNumber: track.volumeNumber || track.discNumber || 1,
+            }));
+
+        return this.requeueInPlace(
+            job,
+            config,
+            'Queued to continue with unavailable track skipped',
+            { preserveSkippedTracks: true }
+        );
+    }
+
+    async publishPartial(jobId, config = this.lastConfig) {
+        await this.compactDuplicates();
+        const job = this.jobs.get(jobId);
+        if (
+            !job ||
+            job.type !== 'album' ||
+            job.status !== DOWNLOAD_JOB_STATUSES.PARTIAL ||
+            !job.result?.partial
+        ) {
+            return null;
+        }
+        if (job.result.partialPublished) return summarizeJob(job);
+
+        const publication = await publishPartialAlbum({
+            stagingAlbumDir: job.result.stagingAlbumDir,
+            finalAlbumDir: job.result.finalAlbumDir,
+            albumName: job.album?.title || job.album?.name || job.result.albumTitle || ('Album ' + job.id),
+            jobId: job.jobId,
+            publishLock: this.maintenanceLock,
+        });
+
+        const timestamp = nowIso();
+        job.result = {
+            ...job.result,
+            ...publication,
+            action: 'partial-published',
+            partialPublished: true,
+        };
+        job.partialPublishedAt = timestamp;
+        job.progress = {
+            ...job.progress,
+            message:
+                'Partial - ' +
+                Number(job.result.completedTracks || 0) +
+                '/' +
+                Number(job.result.totalTracks || 0) +
+                ' tracks · in library',
+            phase: 'partial',
+        };
+        job.updatedAt = timestamp;
+        await this.persistJob(job);
+        return summarizeJob(job);
     }
 
     async requeueAll(status, config = this.lastConfig) {
