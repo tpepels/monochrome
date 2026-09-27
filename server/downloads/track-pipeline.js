@@ -805,6 +805,7 @@ export async function executeTrackDownload({
     conflictPolicy = 'overwrite_if_different',
     relativeDirectory = null,
     track = null,
+    albumMetadata = null,
     resolvedTrack = null,
     onProgress = null,
     signal,
