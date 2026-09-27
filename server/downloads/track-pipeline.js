@@ -23,7 +23,7 @@ const BROWSER_LIKE_HEADERS = Object.freeze({
 const DURATION_TOLERANCE_SECONDS = 8;
 const PREVIEW_DURATION_SECONDS = 35;
 const DOWNLOAD_TRANSFER_MAX_ATTEMPTS = 3;
-const DOWNLOAD_RETRY_AFTER_MAX_MS = 2 * 60 * 1000;
+const DOWNLOAD_RETRY_AFTER_MAX_MS = 5 * 60 * 1000;
 
 function pipelineError(message, failureCode, details = {}) {
     const error = new Error(message);
