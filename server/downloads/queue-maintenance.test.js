@@ -352,6 +352,27 @@ test('optional duplicate check can complete a job before worker execution', asyn
     expect(executed).toBe(false);
 });
 
+test('partial album staging remains protected from maintenance sweeps', async () => {
+    const cfg = config({ workerEnabled: false, transientMinAgeMs: 0 });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        { type: 'album', id: 'protected-partial', quality: 'LOSSLESS' },
+        cfg
+    );
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+    internal.retryable = true;
+
+    const stagingDir = path.join(cfg.downloadRoot, '.monochrome-staging', queued.jobId);
+    await fs.mkdir(stagingDir, { recursive: true });
+    await fs.writeFile(path.join(stagingDir, 'marker'), 'keep');
+
+    await queue.sweep(cfg, { minAgeMs: 0, dryRun: false });
+
+    await expect(fs.stat(stagingDir)).resolves.toBeTruthy();
+    expect(queue.activeJobIds()).toContain(queued.jobId);
+});
+
 test('hard queue reset removes transient data but preserves completed music', async () => {
     const cfg = config({ workerEnabled: false });
     const queue = new MemoryDownloadQueue({ persistToDisk: false });
