@@ -78,6 +78,10 @@ function coverFetch() {
     };
 }
 
+async function noOpMetadataEmbedder() {
+    return { embedded: true, method: 'test' };
+}
+
 function wavBuffer({ durationSeconds = 2, sampleRate = 8000 } = {}) {
     const channels = 1;
     const bitsPerSample = 16;
