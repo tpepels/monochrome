@@ -209,30 +209,6 @@ function serverJobStatusText(job) {
     }
 }
 
-function replaceServerCancelWithDismiss(button, onDismiss) {
-    if (!button) return null;
-
-    // Upstream wires this button to AbortController.abort(). Server downloads
-    // keep running independently, so replace the node to remove that inherited
-    // listener and make the x a presentation-only dismiss action.
-    const dismissButton = button.cloneNode(true);
-    dismissButton.title = 'Hide download notification';
-    dismissButton.setAttribute('aria-label', 'Hide download notification');
-    button.replaceWith(dismissButton);
-
-    dismissButton.addEventListener(
-        'click',
-        (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onDismiss?.();
-        },
-        { once: true }
-    );
-
-    return dismissButton;
-}
-
 function formatBytes(bytes) {
     const value = Number(bytes || 0);
     if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
@@ -365,10 +341,13 @@ export function createSelfHostDownloadBridge(ui) {
             );
 
             serverOngoingDownloads.add(downloadKey);
-            const { taskEl } = ui.addDownloadTask(track.id, track, null, api, controller);
-            replaceServerCancelWithDismiss(
-                taskEl.querySelector('.download-cancel'),
-                () => ui.dismissDownloadTask(track.id)
+            const { taskEl } = ui.addDownloadTask(
+                track.id,
+                track,
+                null,
+                api,
+                controller,
+                { dismissOnly: true }
             );
             ui.updateDownloadProgress(track.id, { message: 'Queued on server' });
 
@@ -426,11 +405,8 @@ export function createSelfHostDownloadBridge(ui) {
             const notification = ui.createBulkDownloadNotification(
                 'album',
                 album.title || album.name || 'Album',
-                1
-            );
-            replaceServerCancelWithDismiss(
-                notification.querySelector('.download-cancel'),
-                () => ui.dismissBulkDownloadNotification(notification)
+                1,
+                { dismissOnly: true }
             );
             updateServerBulkDownloadProgress(notification, body.job, tracks);
 
