@@ -106,6 +106,11 @@ function buildFailureDiagnostics(error, job, failedAt) {
             expectedDuration: numberOrNull(error?.expectedDuration),
             extension: error?.extension || null,
             errorCode: error?.code || null,
+            originalTrackId: error?.originalTrackId || null,
+            alternateTrackId: error?.alternateTrackId || null,
+            alternateMatchScore: numberOrNull(error?.alternateMatchScore),
+            primaryFailureCode: error?.primaryFailureCode || null,
+            primaryStatus: numberOrNull(error?.primaryStatus),
             causeName: error?.cause?.name || null,
             causeCode: error?.cause?.code || null,
             causeMessage: error?.cause?.message ? sanitizeErrorMessage(error.cause.message) : null,
@@ -868,9 +873,11 @@ export class MemoryDownloadQueue {
             ...job.progress,
             percent: transferPercent ?? job.progress.percent ?? 1,
             message:
-                retryWaitSeconds > 0
-                    ? `Retrying track in ${retryWaitSeconds}s`
-                    : 'Downloading track',
+                transfer.alternateSource
+                    ? 'Trying alternate track source'
+                    : retryWaitSeconds > 0
+                      ? `Retrying track in ${retryWaitSeconds}s`
+                      : 'Downloading track',
             phase: 'processing',
             downloadedBytes,
             totalBytes: totalBytes || null,
@@ -882,6 +889,17 @@ export class MemoryDownloadQueue {
             retryAttempt: Number(transfer.retryAttempt || 0) || null,
             retryStatus: Number(transfer.retryStatus || 0) || null,
             retryAfter: transfer.retryAfter || null,
+            alternateSource: Boolean(transfer.alternateSource),
+            originalTrackId: transfer.originalTrackId || job.progress.originalTrackId || null,
+            alternateTrackId: transfer.alternateTrackId || job.progress.alternateTrackId || null,
+            alternateMatchScore:
+                Number.isFinite(Number(transfer.alternateMatchScore))
+                    ? Number(transfer.alternateMatchScore)
+                    : job.progress.alternateMatchScore || null,
+            alternateExactIsrc:
+                transfer.alternateExactIsrc == null
+                    ? Boolean(job.progress.alternateExactIsrc)
+                    : Boolean(transfer.alternateExactIsrc),
         };
         job.updatedAt = timestamp;
         this.persistJob(job).catch(() => {});
@@ -908,9 +926,11 @@ export class MemoryDownloadQueue {
             message:
                 event.phase === 'publishing'
                     ? 'Publishing album'
-                    : retryWaitSeconds > 0
-                      ? `Retrying current track in ${retryWaitSeconds}s`
-                      : 'Processing album',
+                    : event.trackTransfer?.alternateSource
+                      ? 'Trying alternate source for current track'
+                      : retryWaitSeconds > 0
+                        ? `Retrying current track in ${retryWaitSeconds}s`
+                        : 'Processing album',
             phase: event.phase,
             totalTracks,
             completedTracks,
@@ -918,6 +938,18 @@ export class MemoryDownloadQueue {
             failedTrack: event.failedTrack || job.progress.failedTrack || null,
             failedTracks: Array.isArray(event.failedTracks) ? event.failedTracks : job.progress.failedTracks || [],
             trackTransfer: event.trackTransfer || null,
+            originalTrackId:
+                event.trackTransfer?.originalTrackId || job.progress.originalTrackId || null,
+            alternateTrackId:
+                event.trackTransfer?.alternateTrackId || job.progress.alternateTrackId || null,
+            alternateMatchScore:
+                Number.isFinite(Number(event.trackTransfer?.alternateMatchScore))
+                    ? Number(event.trackTransfer.alternateMatchScore)
+                    : job.progress.alternateMatchScore || null,
+            alternateExactIsrc:
+                event.trackTransfer?.alternateExactIsrc == null
+                    ? Boolean(job.progress.alternateExactIsrc)
+                    : Boolean(event.trackTransfer.alternateExactIsrc),
         };
         if (event.trackProgress) {
             job.trackProgress = event.trackProgress;

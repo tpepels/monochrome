@@ -297,6 +297,88 @@ test('reports retry context after Cloudflare 520 retries are exhausted', async (
     expect(fetchCalls).toBe(3);
 });
 
+test('falls back to a strict alternate track stream after primary CDN retries are exhausted', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const primary = resolvedTrack({
+        streamUrl: 'https://cdn.test/broken.wav',
+        sourceUrl: 'https://cdn.test/broken.wav',
+    });
+    const alternate = resolvedTrack({
+        streamUrl: 'https://cdn.test/alternate.wav',
+        sourceUrl: 'https://cdn.test/alternate.wav',
+        originalTrackId: 'track1',
+        alternateTrackId: 'alt-track-1',
+        alternateMatchScore: 200,
+        alternateExactIsrc: true,
+    });
+    const alternateCalls = [];
+    const progress = [];
+    let primaryFetches = 0;
+    let alternateFetches = 0;
+
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload(id, quality, options) {
+            alternateCalls.push({ id, quality, track: options.track });
+            return alternate;
+        },
+    };
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-alternate-fallback',
+        config,
+        resolver,
+        track: primary.metadata,
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cdn.test/broken.wav') {
+                primaryFetches++;
+                return new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                });
+            }
+            if (String(url) === 'https://cdn.test/alternate.wav') {
+                alternateFetches++;
+                return new Response(audio);
+            }
+            return new Response('missing', { status: 404 });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        onProgress: (event) => progress.push(event),
+    });
+
+    expect(primaryFetches).toBe(3);
+    expect(alternateFetches).toBe(1);
+    expect(alternateCalls).toHaveLength(1);
+    expect(alternateCalls[0]).toMatchObject({
+        id: 'track1',
+        quality: 'LOSSLESS',
+    });
+    expect(progress).toContainEqual(
+        expect.objectContaining({
+            alternateSource: true,
+            originalTrackId: 'track1',
+            alternateTrackId: 'alt-track-1',
+            alternateMatchScore: 200,
+            alternateExactIsrc: true,
+        })
+    );
+    expect(result.resolved).toMatchObject({
+        originalTrackId: 'track1',
+        alternateTrackId: 'alt-track-1',
+    });
+    expect(result.relativePath).toBe(path.join('Album Artist', 'Album Title', '01 - Track Title.wav'));
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
 test('retries a mid-stream socket reset without duplicating partial bytes', async () => {
     const audio = wavBuffer({ durationSeconds: 2 });
     let fetchCalls = 0;

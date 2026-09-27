@@ -880,6 +880,72 @@ export class TracksStreamerAPI {
     }
 
     /**
+     * Finds a conservative alternate Tracks ID for a stream that remained unavailable
+     * after transfer retries. The original ID is explicitly excluded.
+     *
+     * An alternate must either share the exact ISRC (score 200), or match exact
+     * title + artist + duration within 3 seconds (score 175).
+     */
+    async resolveAlternateTrackStream(idOrTrack, quality = 'LOSSLESS', options = {}) {
+        const inputTrack = options.track || (typeof idOrTrack === 'object' ? idOrTrack : null);
+        const originalId = String(
+            options.excludeTrackId ||
+                (typeof idOrTrack === 'string' ? idOrTrack : inputTrack?.tracksTrackId || inputTrack?.id || '')
+        ).replace(/^(?:tracks|mono):(?:track:)?/, '');
+
+        const title = inputTrack?.title;
+        const artist =
+            inputTrack?.artist?.name ||
+            inputTrack?.artists?.[0]?.name ||
+            (typeof inputTrack?.artist === 'string' ? inputTrack.artist : '');
+
+        if (!title || !artist) return null;
+
+        const searchQuery = `${artist} ${title}`.trim();
+        if (!searchQuery) return null;
+
+        try {
+            const searchResult = await this.searchTracks(searchQuery, {
+                limit: 12,
+                signal: options.signal,
+                skipCache: true,
+            });
+
+            let bestCandidate = null;
+            let bestScore = 0;
+
+            for (const candidate of searchResult.items || []) {
+                const candidateId = String(candidate.tracksTrackId || candidate.trackId || candidate.id || '');
+                if (!candidateId || candidateId === originalId) continue;
+
+                const score = scoreTrackCandidate(candidate, inputTrack);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            if (!bestCandidate || bestScore < 175) return null;
+
+            const alternateTrackId = String(
+                bestCandidate.tracksTrackId || bestCandidate.trackId || bestCandidate.id || ''
+            );
+            if (!alternateTrackId) return null;
+
+            return {
+                ...this.getStreamUrl(alternateTrackId, quality, { track: inputTrack || bestCandidate }),
+                alternateTrackId,
+                originalTrackId: originalId || null,
+                matchScore: bestScore,
+                exactIsrc: bestScore === 200,
+            };
+        } catch (error) {
+            console.warn('[TracksStreamerAPI] Failed to resolve alternate track stream:', error);
+            return null;
+        }
+    }
+
+    /**
      * Resolves a track stream from tracks.monochrome.st.
      * If the track is native to tracks.monochrome.st, returns immediate stream URL.
      * If external, searches by title+artist/ISRC on tracks.monochrome.st and resolves the highest quality FLAC stream.

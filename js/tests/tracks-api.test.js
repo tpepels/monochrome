@@ -269,6 +269,85 @@ describe('tracks-api module', () => {
             expect(stream.url).toBe('https://tracks.monochrome.st/track/155142501534011392');
         });
 
+        it('finds a strict alternate stream while excluding the broken track id', async () => {
+            vi.spyOn(api, 'searchTracks').mockResolvedValueOnce({
+                items: [
+                    {
+                        trackId: '245266990510825472',
+                        tracksTrackId: '245266990510825472',
+                        title: 'Marginalia #147',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 180,
+                    },
+                    {
+                        trackId: '999999999999999999',
+                        tracksTrackId: '999999999999999999',
+                        title: 'Marginalia #147',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 181,
+                    },
+                    {
+                        trackId: '888888888888888888',
+                        tracksTrackId: '888888888888888888',
+                        title: 'Marginalia #147 (Live)',
+                        artist: { name: 'Masayoshi Fujita' },
+                        duration: 240,
+                    },
+                ],
+            });
+
+            const track = {
+                id: '245266990510825472',
+                tracksTrackId: '245266990510825472',
+                title: 'Marginalia #147',
+                artist: { name: 'Masayoshi Fujita' },
+                duration: 180,
+            };
+
+            const stream = await api.resolveAlternateTrackStream(track.id, 'LOSSLESS', {
+                track,
+                excludeTrackId: track.id,
+            });
+
+            expect(api.searchTracks).toHaveBeenCalledWith('Masayoshi Fujita Marginalia #147', {
+                limit: 12,
+                signal: undefined,
+                skipCache: true,
+            });
+            expect(stream).toMatchObject({
+                alternateTrackId: '999999999999999999',
+                originalTrackId: '245266990510825472',
+                matchScore: 175,
+                exactIsrc: false,
+                url: 'https://tracks.monochrome.st/track/999999999999999999',
+            });
+        });
+
+        it('rejects alternate candidates that do not meet the strict match threshold', async () => {
+            vi.spyOn(api, 'searchTracks').mockResolvedValueOnce({
+                items: [
+                    {
+                        trackId: '777777777777777777',
+                        tracksTrackId: '777777777777777777',
+                        title: 'Marginalia #147',
+                        artist: { name: 'Different Artist' },
+                        duration: 180,
+                    },
+                ],
+            });
+
+            const stream = await api.resolveAlternateTrackStream('245266990510825472', 'LOSSLESS', {
+                track: {
+                    id: '245266990510825472',
+                    title: 'Marginalia #147',
+                    artist: { name: 'Masayoshi Fujita' },
+                    duration: 180,
+                },
+            });
+
+            expect(stream).toBeNull();
+        });
+
         it('resolves external track via search lookup when matching candidate found', async () => {
             vi.spyOn(api, 'searchTracks').mockResolvedValueOnce({
                 items: [
