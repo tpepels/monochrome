@@ -404,6 +404,7 @@ export async function executeAlbumDownload({
                         metadataEmbedder,
                         relativeDirectory: albumRelativePath,
                         track,
+                        albumMetadata: resolvedAlbum,
                         onProgress: (trackTransfer) =>
                             onProgress?.({
                                 phase: 'processing',
