@@ -77,6 +77,24 @@ describe('tracks-api module', () => {
         });
     });
 
+    it('keeps canonical release artist on normalized track album metadata', () => {
+        const track = normalizeTracksTrack({
+            id: 'track-1',
+            title: 'Movement I',
+            artistNames: ['Track Performer'],
+            releaseId: 'release-1',
+            albumTitle: 'Música callada',
+            albumArtist: { id: 'album-artist', name: 'Frederic Mompou' },
+            albumArtists: [{ id: 'album-artist', name: 'Frederic Mompou' }],
+        });
+
+        expect(track.artist.name).toBe('Track Performer');
+        expect(track.album.title).toBe('Música callada');
+        expect(track.album.releaseId).toBe('release-1');
+        expect(track.album.artist.name).toBe('Frederic Mompou');
+        expect(track.album.artists.map((artist) => artist.name)).toEqual(['Frederic Mompou']);
+    });
+
     describe('normalizeTracksRelease', () => {
         it('normalizes raw release into album format', () => {
             const raw = {

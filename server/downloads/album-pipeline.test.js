@@ -415,6 +415,7 @@ test('forces track files into the album metadata directory even when track metad
         return coverFetch()(url);
     };
 
+    const embeddedMetadata = [];
     await executeAlbumDownload({
         id: 'album1',
         jobId: 'job-normalize-path',
@@ -422,7 +423,10 @@ test('forces track files into the album metadata directory even when track metad
         resolver: albumResolverWithTrackMetadataMismatch(),
         trackExecutor: executeTrackDownload,
         fetchImpl,
-        metadataEmbedder: async () => ({ embedded: true, method: 'test' }),
+        metadataEmbedder: async (_filePath, metadata) => {
+            embeddedMetadata.push(metadata);
+            return { embedded: true, method: 'test' };
+        },
         publishLock: new InMemoryPublishLock(),
     });
 
@@ -431,6 +435,10 @@ test('forces track files into the album metadata directory even when track metad
     await expect(fs.stat(path.join(config.downloadRoot, 'Different Track Artist'))).rejects.toMatchObject({
         code: 'ENOENT',
     });
+    expect(embeddedMetadata).toHaveLength(2);
+    expect(embeddedMetadata.map((metadata) => metadata.album)).toEqual(['Album Title', 'Album Title']);
+    expect(embeddedMetadata.map((metadata) => metadata.albumArtist)).toEqual(['Album Artist', 'Album Artist']);
+    expect(embeddedMetadata.map((metadata) => metadata.artist)).toEqual(['Track Artist', 'Track Artist']);
 });
 
 test('one failed track preserves staging and leaves no final album directory', async () => {

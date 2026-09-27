@@ -710,18 +710,24 @@ function assertNotPreview(resolved) {
     }
 }
 
-function buildMetadata(resolved) {
+function buildMetadata(resolved, albumMetadata = null) {
     const track = resolved.metadata || {};
+    const album = albumMetadata || track.album || null;
+    const albumArtist =
+        album?.artist?.name ||
+        (Array.isArray(album?.artists) ? album.artists.map((artist) => artist?.name).filter(Boolean).join(', ') : '') ||
+        getAlbumArtistName(track);
+
     return {
         title: getTrackTitle(track),
         artist: getArtistName(track),
-        album: getAlbumTitle(track),
-        albumArtist: getAlbumArtistName(track),
+        album: album?.title || album?.name || getAlbumTitle(track),
+        albumArtist,
         discNumber: track.volumeNumber || track.discNumber || 1,
         trackNumber: getTrackNumber(track),
-        releaseDate: track.album?.releaseDate || track.releaseDate || track.streamStartDate?.split?.('T')?.[0] || null,
+        releaseDate: album?.releaseDate || track.album?.releaseDate || track.releaseDate || track.streamStartDate?.split?.('T')?.[0] || null,
         isrc: resolved.isrc || track.isrc || null,
-        coverUrl: resolved.coverUrl || null,
+        coverUrl: album?.coverUrl || album?.cover || resolved.coverUrl || null,
     };
 }
 
@@ -799,6 +805,7 @@ export async function executeTrackDownload({
     conflictPolicy = 'overwrite_if_different',
     relativeDirectory = null,
     track = null,
+    albumMetadata = null,
     resolvedTrack = null,
     onProgress = null,
     signal,
@@ -869,7 +876,7 @@ export async function executeTrackDownload({
         }
         let validation = await validateAudioFile(tempFile, resolved, { fsOps });
 
-        const metadata = buildMetadata(resolved);
+        const metadata = buildMetadata(resolved, albumMetadata);
         const metadataResult = await metadataEmbedder(tempFile, metadata, { resolved, fsOps, signal });
         validation = await validateAudioFile(tempFile, resolved, { fsOps });
 
