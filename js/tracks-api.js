@@ -417,6 +417,74 @@ export function extractTracksSuggestions(results, query) {
  * @param {Object} target
  * @returns {number} Score (higher is better, 100+ is a strong match)
  */
+function strictIdentityString(value) {
+    return String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function primaryArtistName(track) {
+    return (
+        track?.artist?.name ||
+        track?.artistNames?.[0] ||
+        track?.artists?.[0]?.name ||
+        (typeof track?.artist === 'string' ? track.artist : '')
+    );
+}
+
+function durationSeconds(track) {
+    const value = Number(track?.duration || 0);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return value > 1000 ? Math.round(value / 1000) : Math.round(value);
+}
+
+/**
+ * Scores only candidates safe enough to use as a replacement audio source for
+ * an already identified track. This is intentionally stricter than the normal
+ * metadata resolver.
+ *
+ * 300 = exact recordingId
+ * 250 = exact ISRC
+ * 190 = exact full title + exact primary artist + duration within 3 seconds
+ * 160 = exact full title + exact primary artist, but duration is unavailable
+ *   0 = reject
+ */
+export function scoreAlternateTrackCandidate(candidate, target) {
+    if (!candidate || !target) return 0;
+
+    const targetRecordingId = String(target.recordingId || '').trim();
+    const candidateRecordingId = String(candidate.recordingId || '').trim();
+    if (targetRecordingId && candidateRecordingId && targetRecordingId === candidateRecordingId) {
+        return 300;
+    }
+
+    const targetIsrc = String(target.isrc || '').trim().toLowerCase();
+    const candidateIsrc = String(candidate.isrc || '').trim().toLowerCase();
+    if (targetIsrc && candidateIsrc && targetIsrc === candidateIsrc) {
+        return 250;
+    }
+
+    const targetTitle = strictIdentityString(target.title);
+    const candidateTitle = strictIdentityString(candidate.title);
+    if (!targetTitle || targetTitle !== candidateTitle) return 0;
+
+    const targetArtist = strictIdentityString(primaryArtistName(target));
+    const candidateArtist = strictIdentityString(primaryArtistName(candidate));
+    if (!targetArtist || targetArtist !== candidateArtist) return 0;
+
+    const targetDuration = durationSeconds(target);
+    const candidateDuration = durationSeconds(candidate);
+    if (targetDuration > 0 && candidateDuration > 0) {
+        return Math.abs(targetDuration - candidateDuration) <= 3 ? 190 : 0;
+    }
+
+    return 160;
+}
+
 export function scoreTrackCandidate(candidate, target) {
     if (!candidate || !target) return 0;
 
@@ -913,35 +981,67 @@ export class TracksStreamerAPI {
 
             let bestCandidate = null;
             let bestScore = 0;
+            let candidatesConsidered = 0;
 
             for (const candidate of searchResult.items || []) {
                 const candidateId = String(candidate.tracksTrackId || candidate.trackId || candidate.id || '');
                 if (!candidateId || candidateId === originalId) continue;
 
-                const score = scoreTrackCandidate(candidate, inputTrack);
+                candidatesConsidered += 1;
+                const score = scoreAlternateTrackCandidate(candidate, inputTrack);
                 if (score > bestScore) {
                     bestScore = score;
                     bestCandidate = candidate;
                 }
             }
 
-            if (!bestCandidate || bestScore < 175) return null;
+            if (!bestCandidate || bestScore < 160) {
+                return {
+                    unavailable: true,
+                    alternateSearchAttempted: true,
+                    originalTrackId: originalId || null,
+                    candidatesConsidered,
+                    bestMatchScore: bestScore || 0,
+                    reason: candidatesConsidered === 0 ? 'no-alternate-candidates' : 'no-safe-alternate-match',
+                };
+            }
 
             const alternateTrackId = String(
                 bestCandidate.tracksTrackId || bestCandidate.trackId || bestCandidate.id || ''
             );
-            if (!alternateTrackId) return null;
+            if (!alternateTrackId) {
+                return {
+                    unavailable: true,
+                    alternateSearchAttempted: true,
+                    originalTrackId: originalId || null,
+                    candidatesConsidered,
+                    bestMatchScore: bestScore || 0,
+                    reason: 'alternate-candidate-missing-id',
+                };
+            }
 
             return {
                 ...this.getStreamUrl(alternateTrackId, quality, { track: inputTrack || bestCandidate }),
                 alternateTrackId,
                 originalTrackId: originalId || null,
                 matchScore: bestScore,
-                exactIsrc: bestScore === 200,
+                exactRecordingId: bestScore === 300,
+                exactIsrc: bestScore === 250,
+                durationVerified: bestScore === 190,
+                durationUnavailable: bestScore === 160,
+                candidatesConsidered,
             };
         } catch (error) {
             console.warn('[TracksStreamerAPI] Failed to resolve alternate track stream:', error);
-            return null;
+            return {
+                unavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: originalId || null,
+                candidatesConsidered: 0,
+                bestMatchScore: 0,
+                reason: 'alternate-search-failed',
+                searchError: String(error?.message || error),
+            };
         }
     }
 
