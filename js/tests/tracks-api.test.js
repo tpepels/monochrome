@@ -90,6 +90,7 @@ describe('tracks-api module', () => {
 
         expect(track.artist.name).toBe('Track Performer');
         expect(track.album.title).toBe('Música callada');
+        expect(track.album.releaseId).toBe('release-1');
         expect(track.album.artist.name).toBe('Frederic Mompou');
         expect(track.album.artists.map((artist) => artist.name)).toEqual(['Frederic Mompou']);
     });
