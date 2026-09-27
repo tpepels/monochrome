@@ -323,6 +323,56 @@ export class MonochromeResolverFacade {
         });
     }
 
+    async resolveAlternateTrackDownload(trackId, quality = 'LOSSLESS', { track = null, signal = null } = {}) {
+        const normalizedQuality = normalizeQuality(quality);
+        const metadata = normalizeTrack(track || { id: trackId });
+
+        if (typeof this.tracksApi.resolveAlternateTrackStream !== 'function') return null;
+
+        const stream = await this.tracksApi.resolveAlternateTrackStream(trackId, normalizedQuality, {
+            track: metadata,
+            excludeTrackId: trackId,
+            signal,
+        });
+        if (!stream?.url) return null;
+
+        const manifestDetails = inspectManifest(null);
+        const presentationFlags = getPresentationFlags({
+            audioQuality: stream.quality || normalizedQuality,
+            manifestMimeType: stream.mediaMimeType || stream.mimeType || null,
+        });
+
+        return {
+            ...this.buildResolvedTrack({
+                provider: stream.provider || 'monochrome',
+                providerInstance: null,
+                track: metadata,
+                lookup: null,
+                streamUrl: stream.url,
+                sourceUrl: stream.sourceUrl || stream.url,
+                manifest: null,
+                manifestDetails,
+                quality: normalizedQuality,
+                replayGain: stream.rgInfo || replayGainFromInfo(),
+                presentationFlags,
+                metadataProvider: 'monochrome',
+                providerErrors: [],
+                external: {
+                    streamType: stream.playbackType || 'direct',
+                    decryptionKey: null,
+                    keyId: null,
+                    mimeType: stream.mimeType || stream.mediaMimeType || 'audio/flac',
+                    mediaMimeType: stream.mediaMimeType || stream.mimeType || 'audio/flac',
+                    qualityDisplay: stream.qualityDisplay || 'FLAC',
+                },
+            }),
+            originalTrackId: stream.originalTrackId || String(trackId),
+            alternateTrackId: stream.alternateTrackId || null,
+            alternateMatchScore: stream.matchScore ?? null,
+            alternateExactIsrc: Boolean(stream.exactIsrc),
+        };
+    }
+
     buildResolvedTrack({
         provider,
         providerInstance,
@@ -413,6 +463,10 @@ export class ServerResolverAdapter {
 
     async resolveTrackDownload(trackId, quality = 'LOSSLESS', options = {}) {
         return this.facade.resolveTrackDownload(trackId, quality, options);
+    }
+
+    async resolveAlternateTrackDownload(trackId, quality = 'LOSSLESS', options = {}) {
+        return this.facade.resolveAlternateTrackDownload(trackId, quality, options);
     }
 
     async resolveAlbum(albumId, options = {}) {
