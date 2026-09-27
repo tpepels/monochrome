@@ -503,7 +503,7 @@ export class MemoryDownloadQueue {
             .find(
                 (job) =>
                     job &&
-                    !TERMINAL_STATUSES.has(job.status) &&
+                    (!TERMINAL_STATUSES.has(job.status) || job.status === DOWNLOAD_JOB_STATUSES.PARTIAL) &&
                     job.type === payload.type &&
                     job.id === payload.id &&
                     job.quality === payload.quality
@@ -652,8 +652,9 @@ export class MemoryDownloadQueue {
         skipped.add(String(failedTrackId));
         job.skippedTrackIds = [...skipped];
         job.missingTracks = (job.tracks || [])
-            .filter((track) => skipped.has(String(track?.id)))
-            .map((track, index) => ({
+            .map((track, index) => ({ track, index }))
+            .filter(({ track }) => skipped.has(String(track?.id)))
+            .map(({ track, index }) => ({
                 trackId: String(track.id),
                 title: track.title || track.name || null,
                 trackNumber: track.trackNumber || track.number || index + 1,
@@ -1277,6 +1278,16 @@ export class RedisDownloadQueue extends MemoryDownloadQueue {
         return super.retry(jobId, config);
     }
 
+    async skipFailedTrack(jobId, config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.skipFailedTrack(jobId, config);
+    }
+
+    async publishPartial(jobId, config = this.lastConfig) {
+        await this.hydrateFromRedis();
+        return super.publishPartial(jobId, config);
+    }
+
     async retryAllFailed(config = this.lastConfig) {
         await this.hydrateFromRedis();
         return super.retryAllFailed(config);
@@ -1399,6 +1410,16 @@ export class DownloadQueueManager {
     async retry(jobId, config) {
         const backend = await this.backendFor(config);
         return backend.retry(jobId, config);
+    }
+
+    async skipFailedTrack(jobId, config) {
+        const backend = await this.backendFor(config);
+        return backend.skipFailedTrack(jobId, config);
+    }
+
+    async publishPartial(jobId, config) {
+        const backend = await this.backendFor(config);
+        return backend.publishPartial(jobId, config);
     }
 
     async retryAllFailed(config) {
