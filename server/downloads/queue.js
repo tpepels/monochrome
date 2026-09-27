@@ -120,6 +120,8 @@ function buildFailureDiagnostics(error, job, failedAt) {
             phase: progress.phase || job.publicationPhase || null,
             progressMessage: progress.message || null,
             currentTrack: diagnosticTrackId,
+            failedTrack: progress.failedTrack || diagnosticTrackId,
+            failedTracks: Array.isArray(progress.failedTracks) ? progress.failedTracks : [],
             currentTrackTitle: currentTrack?.title || currentTrack?.name || null,
             completedTracks: numberOrNull(progress.completedTracks),
             totalTracks: numberOrNull(progress.totalTracks),
