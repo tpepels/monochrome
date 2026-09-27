@@ -109,6 +109,11 @@ function buildFailureDiagnostics(error, job, failedAt) {
             originalTrackId: error?.originalTrackId || null,
             alternateTrackId: error?.alternateTrackId || null,
             alternateMatchScore: numberOrNull(error?.alternateMatchScore),
+            alternateSearchAttempted: Boolean(error?.alternateSearchAttempted),
+            alternateCandidatesConsidered: numberOrNull(error?.alternateCandidatesConsidered),
+            alternateBestMatchScore: numberOrNull(error?.alternateBestMatchScore),
+            alternateReason: error?.alternateReason || null,
+            alternateSearchError: error?.alternateSearchError ? sanitizeErrorMessage(error.alternateSearchError) : null,
             primaryFailureCode: error?.primaryFailureCode || null,
             primaryStatus: numberOrNull(error?.primaryStatus),
             causeName: error?.cause?.name || null,
@@ -896,10 +901,26 @@ export class MemoryDownloadQueue {
                 Number.isFinite(Number(transfer.alternateMatchScore))
                     ? Number(transfer.alternateMatchScore)
                     : job.progress.alternateMatchScore || null,
+            alternateExactRecordingId:
+                transfer.alternateExactRecordingId == null
+                    ? Boolean(job.progress.alternateExactRecordingId)
+                    : Boolean(transfer.alternateExactRecordingId),
             alternateExactIsrc:
                 transfer.alternateExactIsrc == null
                     ? Boolean(job.progress.alternateExactIsrc)
                     : Boolean(transfer.alternateExactIsrc),
+            alternateDurationVerified:
+                transfer.alternateDurationVerified == null
+                    ? Boolean(job.progress.alternateDurationVerified)
+                    : Boolean(transfer.alternateDurationVerified),
+            alternateDurationUnavailable:
+                transfer.alternateDurationUnavailable == null
+                    ? Boolean(job.progress.alternateDurationUnavailable)
+                    : Boolean(transfer.alternateDurationUnavailable),
+            alternateCandidatesConsidered:
+                Number.isFinite(Number(transfer.alternateCandidatesConsidered))
+                    ? Number(transfer.alternateCandidatesConsidered)
+                    : job.progress.alternateCandidatesConsidered || null,
         };
         job.updatedAt = timestamp;
         this.persistJob(job).catch(() => {});
@@ -946,10 +967,26 @@ export class MemoryDownloadQueue {
                 Number.isFinite(Number(event.trackTransfer?.alternateMatchScore))
                     ? Number(event.trackTransfer.alternateMatchScore)
                     : job.progress.alternateMatchScore || null,
+            alternateExactRecordingId:
+                event.trackTransfer?.alternateExactRecordingId == null
+                    ? Boolean(job.progress.alternateExactRecordingId)
+                    : Boolean(event.trackTransfer.alternateExactRecordingId),
             alternateExactIsrc:
                 event.trackTransfer?.alternateExactIsrc == null
                     ? Boolean(job.progress.alternateExactIsrc)
                     : Boolean(event.trackTransfer.alternateExactIsrc),
+            alternateDurationVerified:
+                event.trackTransfer?.alternateDurationVerified == null
+                    ? Boolean(job.progress.alternateDurationVerified)
+                    : Boolean(event.trackTransfer.alternateDurationVerified),
+            alternateDurationUnavailable:
+                event.trackTransfer?.alternateDurationUnavailable == null
+                    ? Boolean(job.progress.alternateDurationUnavailable)
+                    : Boolean(event.trackTransfer.alternateDurationUnavailable),
+            alternateCandidatesConsidered:
+                Number.isFinite(Number(event.trackTransfer?.alternateCandidatesConsidered))
+                    ? Number(event.trackTransfer.alternateCandidatesConsidered)
+                    : job.progress.alternateCandidatesConsidered || null,
         };
         if (event.trackProgress) {
             job.trackProgress = event.trackProgress;
