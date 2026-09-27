@@ -256,6 +256,43 @@ test('partial album can be published without completing the queue item and retri
     expect(retried.missingTracks).toEqual([]);
 });
 
+test('a partial album remains the canonical row for duplicate enqueue requests', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const first = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'canonical-partial',
+            quality: 'LOSSLESS',
+            album: { id: 'canonical-partial', title: 'Canonical Partial' },
+        },
+        cfg
+    );
+    const internal = queue.jobs.get(first.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.PARTIAL;
+    internal.retryable = true;
+    internal.result = {
+        partial: true,
+        missingTracks: [{ trackId: 't2', title: 'Two' }],
+        completedTracks: 1,
+        totalTracks: 2,
+    };
+
+    const second = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'canonical-partial',
+            quality: 'LOSSLESS',
+            album: { id: 'canonical-partial', title: 'Canonical Partial' },
+        },
+        cfg
+    );
+
+    expect(second.jobId).toBe(first.jobId);
+    expect(second.status).toBe(DOWNLOAD_JOB_STATUSES.PARTIAL);
+    expect(queue.order).toEqual([first.jobId]);
+});
+
 test('optional duplicate check can complete a job before worker execution', async () => {
     const relativePath = path.join('Artist', 'Album', '01 - Song.wav');
     await fs.mkdir(path.join(root, 'music', 'Artist', 'Album'), { recursive: true });
