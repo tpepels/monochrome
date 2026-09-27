@@ -62,6 +62,48 @@ describe('server resolver adapter', () => {
         expect(result.isPreview).toBe(false);
     });
 
+    test('resolves an alternate stream while preserving original track metadata', async () => {
+        const tracksApi = {
+            resolveAlternateTrackStream: vi.fn(async () => ({
+                url: 'https://tracks.example/track/alt-123',
+                sourceUrl: 'https://tracks.example/track/alt-123',
+                provider: 'monochrome',
+                quality: 'LOSSLESS',
+                qualityDisplay: 'FLAC',
+                playbackType: 'direct',
+                mediaMimeType: 'audio/flac',
+                alternateTrackId: 'alt-123',
+                originalTrackId: '123',
+                matchScore: 200,
+                exactIsrc: true,
+            })),
+        };
+        const facade = new MonochromeResolverFacade({ tracksApi });
+        const track = {
+            id: '123',
+            title: 'Song',
+            artist: { name: 'Artist' },
+            album: { title: 'Album', artist: { name: 'Album Artist' } },
+            isrc: 'ISRC1',
+        };
+
+        const result = await facade.resolveAlternateTrackDownload('123', 'LOSSLESS', { track });
+
+        expect(result.streamUrl).toBe('https://tracks.example/track/alt-123');
+        expect(result.metadata).toMatchObject({
+            id: '123',
+            title: 'Song',
+            artist: { name: 'Artist' },
+            album: { title: 'Album', artist: { name: 'Album Artist' } },
+        });
+        expect(result).toMatchObject({
+            originalTrackId: '123',
+            alternateTrackId: 'alt-123',
+            alternateMatchScore: 200,
+            alternateExactIsrc: true,
+        });
+    });
+
     test('reports a resolver failure when Tracks has no stream', async () => {
         const facade = new MonochromeResolverFacade({
             tracksApi: { resolveTrackStream: vi.fn(async () => null) },
