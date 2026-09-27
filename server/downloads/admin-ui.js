@@ -360,11 +360,15 @@ function jobDetails(job) {
         );
     }
     if (job.status === 'partial') {
-        lines.push(
-            job.result && job.result.partialPublished
-                ? '<strong>Partial album is in the music library.</strong>'
-                : '<strong>Partial album is still in staging.</strong>'
-        );
+        if (job.result && job.result.partialPublished) {
+            lines.push('<strong>Partial album is in the music library.</strong>');
+        } else if (job.partialPublishedAt) {
+            lines.push('<strong>A previous partial version remains in the music library; the newer partial is in staging.</strong>');
+        } else {
+            lines.push('<strong>Partial album is still in staging.</strong>');
+        }
+    } else if (job.partialPublishedAt && job.status === 'failed') {
+        lines.push('<strong>The previously published partial album remains in the music library.</strong>');
     }
 
     if (job.status === 'cancelled' && job.cancelReason) {
