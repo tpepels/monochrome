@@ -107,6 +107,29 @@ test('failed retryability follows failure category and retry reuses the same job
     expect(retry.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
 });
 
+test('retry keeps the same job but moves it behind already queued work', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+
+    const failed = await queue.enqueue({ type: 'track', id: 'failed-first', quality: 'LOSSLESS' }, cfg);
+    const queued = await queue.enqueue({ type: 'track', id: 'already-waiting', quality: 'LOSSLESS' }, cfg);
+
+    const failedInternal = queue.jobs.get(failed.jobId);
+    failedInternal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    failedInternal.retryable = true;
+    failedInternal.failureCode = 'CDN_FETCH_FAILED';
+
+    expect(queue.order).toEqual([failed.jobId, queued.jobId]);
+
+    const retried = await queue.retry(failed.jobId, cfg);
+
+    expect(retried.jobId).toBe(failed.jobId);
+    expect(queue.order).toEqual([queued.jobId, failed.jobId]);
+
+    const snapshot = await queue.snapshot(cfg);
+    expect(snapshot.jobs.map((job) => job.id)).toEqual(['already-waiting', 'failed-first']);
+});
+
 test('optional duplicate check can complete a job before worker execution', async () => {
     const relativePath = path.join('Artist', 'Album', '01 - Song.wav');
     await fs.mkdir(path.join(root, 'music', 'Artist', 'Album'), { recursive: true });
