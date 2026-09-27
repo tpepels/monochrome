@@ -305,6 +305,8 @@ function createJob(payload, overrides = {}) {
         cancelReason: null,
         requeuedAsJobId: null,
         requeuedAt: null,
+        restartMessage: null,
+        restartPreserveSkippedTracks: false,
         skippedTrackIds: [],
         missingTracks: [],
         partialPublishedAt: null,
@@ -585,6 +587,8 @@ export class MemoryDownloadQueue {
         job.requeuedAt = null;
         job.restartRequested = false;
         if (!preserveSkippedTracks) {
+            job.restartMessage = null;
+            job.restartPreserveSkippedTracks = false;
             job.skippedTrackIds = [];
             job.missingTracks = [];
         }
@@ -609,6 +613,8 @@ export class MemoryDownloadQueue {
 
         if (this.activeControllers.has(job.jobId)) {
             job.restartRequested = true;
+            job.restartMessage = message;
+            job.restartPreserveSkippedTracks = Boolean(preserveSkippedTracks);
             job.progress = {
                 ...(job.progress || {}),
                 message: 'Restart requested; waiting for current worker to stop',
@@ -868,10 +874,13 @@ export class MemoryDownloadQueue {
                 this.activeControllers.delete(job.jobId);
 
                 if (job.restartRequested && TERMINAL_STATUSES.has(job.status)) {
-                    this.resetJobForRetry(
-                        job,
-                        job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry'
-                    );
+                    const restartMessage =
+                        job.restartMessage ||
+                        (job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry');
+                    const preserveSkippedTracks = Boolean(job.restartPreserveSkippedTracks);
+                    this.resetJobForRetry(job, restartMessage, { preserveSkippedTracks });
+                    job.restartMessage = null;
+                    job.restartPreserveSkippedTracks = false;
                     const moved = this.moveJobToBack(job.jobId);
                     await this.persistJob(job);
                     if (moved) await this.persistOrder();
