@@ -96,6 +96,7 @@ button:disabled { opacity:.45; cursor:default; }
     </div>
     <div class="actions">
         <a class="button" href="/">Monochrome</a>
+        <a class="button" href="http://192.168.1.200:4545/" target="_blank" rel="noopener noreferrer">yt-dlp</a>
         <button id="refresh">Refresh</button>
         <button id="retry-failed" disabled>Retry all failed</button>
         <button id="resume-cancelled" disabled>Resume all cancelled</button>
