@@ -569,6 +569,14 @@ export class MemoryDownloadQueue {
         job.updatedAt = timestamp;
     }
 
+    moveJobToBack(jobId) {
+        const index = this.order.indexOf(jobId);
+        if (index === -1 || index === this.order.length - 1) return false;
+        this.order.splice(index, 1);
+        this.order.push(jobId);
+        return true;
+    }
+
     async requeueInPlace(job, config = this.lastConfig, message = 'Queued for retry') {
         if (!job || !TERMINAL_STATUSES.has(job.status)) return job ? summarizeJob(job) : null;
 
@@ -584,7 +592,9 @@ export class MemoryDownloadQueue {
         }
 
         this.resetJobForRetry(job, message);
+        const moved = this.moveJobToBack(job.jobId);
         await this.persistJob(job);
+        if (moved) await this.persistOrder();
         this.schedule(config);
         return summarizeJob(job);
     }
@@ -755,7 +765,9 @@ export class MemoryDownloadQueue {
                         job,
                         job.status === DOWNLOAD_JOB_STATUSES.CANCELLED ? 'Queued to resume' : 'Queued for retry'
                     );
+                    const moved = this.moveJobToBack(job.jobId);
                     await this.persistJob(job);
+                    if (moved) await this.persistOrder();
                 }
 
                 this.schedule(config);
