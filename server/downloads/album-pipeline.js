@@ -546,7 +546,15 @@ export async function executeAlbumDownload({
         if (!error.failureCode) error.failureCode = 'ALBUM_DOWNLOAD_FAILED';
         onProgress?.({
             phase: 'failed',
+            currentTrack: error.trackId || null,
             failedTrack: error.trackId || null,
+            totalTracks: albumResult?.tracks?.length || null,
+            completedTracks: Number.isFinite(Number(error.albumCompletedTracks))
+                ? Number(error.albumCompletedTracks)
+                : undefined,
+            failedTracks: Array.isArray(error.failedTracks)
+                ? error.failedTracks.map((failure) => failure.trackId)
+                : undefined,
             error: error.message,
             failureCode: error.failureCode,
         });
