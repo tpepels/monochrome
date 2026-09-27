@@ -459,6 +459,103 @@ test('one failed track preserves staging and leaves no final album directory', a
     ).resolves.toBeTruthy();
 });
 
+test('continues after a failed track and reuses later staged tracks on retry', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const jobId = 'job-continue-after-failure';
+    const resolver = albumResolverWithTrackMetadataMismatch();
+    const firstRunCalls = [];
+
+    const firstRunExecutor = async ({ id, config: trackConfig }) => {
+        firstRunCalls.push(id);
+        if (id === 't1') {
+            const error = new Error('track one unavailable');
+            error.failureCode = 'CDN_FETCH_FAILED';
+            throw error;
+        }
+
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId,
+            config,
+            resolver,
+            trackExecutor: firstRunExecutor,
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        trackId: 't1',
+        albumCompletedTracks: 1,
+        albumTotalTracks: 2,
+    });
+
+    expect(firstRunCalls).toEqual(['t1', 't2']);
+    await expect(
+        fs.stat(
+            path.join(
+                config.downloadRoot,
+                '.monochrome-staging',
+                jobId,
+                'staging',
+                'Album Artist',
+                'Album Title',
+                '02 - Two.wav'
+            )
+        )
+    ).resolves.toBeTruthy();
+
+    const retryCalls = [];
+    const retryExecutor = async ({ id, config: trackConfig }) => {
+        retryCalls.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '01 - One.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: retryExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(retryCalls).toEqual(['t1']);
+    expect(result.tracks.map((track) => track.action || 'downloaded')).toEqual([
+        'downloaded',
+        'resumed-staged-track',
+    ]);
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
+    ).resolves.toBeTruthy();
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav'))
+    ).resolves.toBeTruthy();
+});
+
 test('restores existing album if publication fails after backup creation', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
