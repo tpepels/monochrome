@@ -130,6 +130,24 @@ test('retry keeps the same job but moves it behind already queued work', async (
     expect(snapshot.jobs.map((job) => job.id)).toEqual(['already-waiting', 'failed-first']);
 });
 
+test('resuming a cancelled job also moves it behind already queued work', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+
+    const cancelled = await queue.enqueue({ type: 'album', id: 'cancelled-first', quality: 'LOSSLESS' }, cfg);
+    const queued = await queue.enqueue({ type: 'album', id: 'already-waiting-album', quality: 'LOSSLESS' }, cfg);
+
+    const cancelledInternal = queue.jobs.get(cancelled.jobId);
+    cancelledInternal.status = DOWNLOAD_JOB_STATUSES.CANCELLED;
+    cancelledInternal.cancelledAt = new Date().toISOString();
+    cancelledInternal.cancelReason = 'user-requested';
+
+    const resumed = await queue.resumeAllCancelled(cfg);
+
+    expect(resumed.jobs[0].jobId).toBe(cancelled.jobId);
+    expect(queue.order).toEqual([queued.jobId, cancelled.jobId]);
+});
+
 test('optional duplicate check can complete a job before worker execution', async () => {
     const relativePath = path.join('Artist', 'Album', '01 - Song.wav');
     await fs.mkdir(path.join(root, 'music', 'Artist', 'Album'), { recursive: true });
