@@ -188,6 +188,42 @@ test('skip failed track continues the same album job with the track recorded as 
     expect(continued.jobId).toBe(queued.jobId);
 });
 
+test('skipping multiple failed tracks accumulates the unavailable set', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'multi-skip',
+            quality: 'LOSSLESS',
+            album: { id: 'multi-skip', title: 'Multi Skip' },
+            tracks: [
+                { id: 't1', title: 'One', trackNumber: 1 },
+                { id: 't2', title: 'Two', trackNumber: 2 },
+                { id: 't3', title: 'Three', trackNumber: 3 },
+            ],
+        },
+        cfg
+    );
+
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 't1', currentTrack: 't1' };
+
+    await queue.skipFailedTrack(queued.jobId, cfg);
+
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 't3', currentTrack: 't3' };
+
+    const continued = await queue.skipFailedTrack(queued.jobId, cfg);
+
+    expect(continued.skippedTrackIds).toEqual(['t1', 't3']);
+    expect(continued.missingTracks.map((track) => track.trackId)).toEqual(['t1', 't3']);
+    expect(continued.missingTracks.map((track) => track.trackNumber)).toEqual([1, 3]);
+});
+
 test('partial album can be published without completing the queue item and retried later', async () => {
     const cfg = config();
     const queue = new MemoryDownloadQueue({
