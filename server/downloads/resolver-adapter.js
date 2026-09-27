@@ -218,13 +218,33 @@ function normalizeTrack(track, album = null) {
     if (!normalized.artist && Array.isArray(normalized.artists) && normalized.artists.length > 0) {
         normalized.artist = normalized.artists[0];
     }
-    if (album && normalized.album) {
+
+    if (album) {
         normalized.album = {
-            ...normalized.album,
-            releaseDate: normalized.album.releaseDate || album.releaseDate,
-            cover: normalized.album.cover || album.cover,
+            ...(normalized.album || {}),
+            id: album.id || album.releaseId || normalized.album?.id || normalized.album?.releaseId || '',
+            releaseId: album.releaseId || album.id || normalized.album?.releaseId || normalized.album?.id || '',
+            tracksReleaseId:
+                album.tracksReleaseId ||
+                album.releaseId ||
+                album.id ||
+                normalized.album?.tracksReleaseId ||
+                normalized.album?.releaseId ||
+                normalized.album?.id ||
+                '',
+            title: album.title || album.name || normalized.album?.title || normalized.album?.name || 'Unknown Album',
+            artist: album.artist || normalized.album?.artist || null,
+            artists:
+                Array.isArray(album.artists) && album.artists.length
+                    ? album.artists
+                    : Array.isArray(normalized.album?.artists)
+                      ? normalized.album.artists
+                      : [],
+            releaseDate: album.releaseDate || normalized.album?.releaseDate || normalized.releaseDate || '',
+            cover: album.cover || normalized.album?.cover || normalized.cover || null,
         };
     }
+
     return normalized;
 }
 
