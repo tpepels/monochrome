@@ -36,7 +36,7 @@ button,a.button {
 button:hover,a.button:hover { background:var(--panel-2); }
 button.danger { border-color:var(--bad); }
 button:disabled { opacity:.45; cursor:default; }
-.summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin-bottom:16px; }
+.summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin-bottom:16px; }
 .metric,.worker,.job {
     background:var(--panel); border:1px solid var(--border); border-radius:10px;
 }
