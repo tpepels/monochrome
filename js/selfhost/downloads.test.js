@@ -43,9 +43,31 @@ afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     document.getElementById('sidebar-nav-downloads-admin')?.remove();
+    document.getElementById('sidebar-nav-ytdlp')?.remove();
+    document.querySelector('.sidebar-nav.main')?.remove();
 });
 
 describe('self-host download bridge', () => {
+    it('adds self-host Downloads and yt-dlp links to the Monochrome left sidebar', async () => {
+        document.body.insertAdjacentHTML(
+            'beforeend',
+            '<nav class="sidebar-nav main"><ul><li id="sidebar-nav-settings"></li></ul></nav>'
+        );
+
+        createSelfHostDownloadBridge(makeUi());
+        await new Promise((resolve) => queueMicrotask(resolve));
+
+        const downloads = document.querySelector('#sidebar-nav-downloads-admin a');
+        const ytdlp = document.querySelector('#sidebar-nav-ytdlp a');
+
+        expect(downloads?.getAttribute('href')).toBe('/downloads-admin');
+        expect(ytdlp?.getAttribute('href')).toBe('http://192.168.1.200:4545/');
+        expect(ytdlp?.textContent).toContain('yt-dlp');
+
+        const settings = document.getElementById('sidebar-nav-settings');
+        expect(settings?.previousElementSibling?.id).toBe('sidebar-nav-ytdlp');
+    });
+
     it('marks an unsupported server API as unavailable so upstream can fall back to browser download', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 404 })));
 
