@@ -695,6 +695,39 @@ async function decryptCencAudioFile(encryptedFile, outputFile, resolved, { fsOps
     }
 }
 
+async function downloadResolvedTrackToTemp(
+    resolved,
+    tempFile,
+    { jobTempDir, fetchImpl, fsOps, signal, env, timeoutMs, onProgress } = {}
+) {
+    if (resolved.decryptionKey) {
+        const encryptedFile = path.join(jobTempDir, 'track.encrypted');
+        await downloadToTempFile(
+            {
+                ...resolved,
+                streamUrl: resolved.sourceUrl || resolved.streamUrl,
+                manifest: null,
+                manifestDetails: inspectManifest(null),
+                urls: [],
+            },
+            encryptedFile,
+            { fetchImpl, fsOps, signal, env, timeoutMs, onProgress }
+        );
+        await decryptCencAudioFile(encryptedFile, tempFile, resolved, { fsOps });
+        await fsOps.rm(encryptedFile, { force: true }).catch(() => {});
+        return;
+    }
+
+    await downloadToTempFile(resolved, tempFile, {
+        fetchImpl,
+        fsOps,
+        signal,
+        env,
+        timeoutMs,
+        onProgress,
+    });
+}
+
 function assertNotPreview(resolved) {
     const flags = resolved.presentationFlags || {};
     const values = [
@@ -849,23 +882,9 @@ export async function executeTrackDownload({
             };
         }
 
-        if (resolved.decryptionKey) {
-            const encryptedFile = path.join(jobTempDir, 'track.encrypted');
-            await downloadToTempFile(
-                {
-                    ...resolved,
-                    streamUrl: resolved.sourceUrl || resolved.streamUrl,
-                    manifest: null,
-                    manifestDetails: inspectManifest(null),
-                    urls: [],
-                },
-                encryptedFile,
-                { fetchImpl, fsOps, signal, env, timeoutMs: config.fetchTimeoutMs, onProgress }
-            );
-            await decryptCencAudioFile(encryptedFile, tempFile, resolved, { fsOps });
-            await fsOps.rm(encryptedFile, { force: true }).catch(() => {});
-        } else {
-            await downloadToTempFile(resolved, tempFile, {
+        try {
+            await downloadResolvedTrackToTemp(resolved, tempFile, {
+                jobTempDir,
                 fetchImpl,
                 fsOps,
                 signal,
@@ -873,7 +892,59 @@ export async function executeTrackDownload({
                 timeoutMs: config.fetchTimeoutMs,
                 onProgress,
             });
+        } catch (primaryError) {
+            if (
+                signal?.aborted ||
+                primaryError?.failureCode !== 'CDN_FETCH_FAILED' ||
+                typeof resolver.resolveAlternateTrackDownload !== 'function'
+            ) {
+                throw primaryError;
+            }
+
+            const alternate = await resolver.resolveAlternateTrackDownload(id, quality, { track, signal });
+            const primaryUrl = resolved?.streamUrl || resolved?.sourceUrl || null;
+            const alternateUrl = alternate?.streamUrl || alternate?.sourceUrl || null;
+
+            if (!alternate || !alternateUrl || alternateUrl === primaryUrl) {
+                throw primaryError;
+            }
+
+            await fsOps.rm(tempFile, { force: true }).catch(() => {});
+            onProgress?.({
+                alternateSource: true,
+                originalTrackId: alternate.originalTrackId || String(id),
+                alternateTrackId: alternate.alternateTrackId || null,
+                alternateMatchScore: alternate.alternateMatchScore ?? null,
+                alternateExactIsrc: Boolean(alternate.alternateExactIsrc),
+            });
+
+            try {
+                await downloadResolvedTrackToTemp(alternate, tempFile, {
+                    jobTempDir,
+                    fetchImpl,
+                    fsOps,
+                    signal,
+                    env,
+                    timeoutMs: config.fetchTimeoutMs,
+                    onProgress,
+                });
+                resolved = alternate;
+            } catch (alternateError) {
+                try {
+                    alternateError.originalTrackId = alternate.originalTrackId || String(id);
+                    alternateError.alternateTrackId = alternate.alternateTrackId || null;
+                    alternateError.alternateMatchScore = alternate.alternateMatchScore ?? null;
+                    alternateError.primaryFailureCode = primaryError?.failureCode || null;
+                    alternateError.primaryStatus = Number.isFinite(Number(primaryError?.status))
+                        ? Number(primaryError.status)
+                        : null;
+                } catch {
+                    // Preserve the alternate transfer error if it is non-extensible.
+                }
+                throw alternateError;
+            }
         }
+
         let validation = await validateAudioFile(tempFile, resolved, { fsOps });
 
         const metadata = buildMetadata(resolved, albumMetadata);
