@@ -467,31 +467,31 @@ test('one failed track preserves staging and leaves no final album directory', a
     ).resolves.toBeTruthy();
 });
 
-test('continues after a failed track and reuses later staged tracks on retry', async () => {
+test('fails fast on an exhausted track and reuses prior staged tracks on retry', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
         downloadRoot: path.join(root, 'music'),
     };
-    const jobId = 'job-continue-after-failure';
+    const jobId = 'job-fail-fast';
     const resolver = albumResolverWithTrackMetadataMismatch();
     const firstRunCalls = [];
 
     const firstRunExecutor = async ({ id, config: trackConfig }) => {
         firstRunCalls.push(id);
-        if (id === 't1') {
-            const error = new Error('track one unavailable');
+        if (id === 't2') {
+            const error = new Error('track two unavailable');
             error.failureCode = 'CDN_FETCH_FAILED';
             throw error;
         }
 
-        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
         return {
             success: true,
             id,
             finalFile: filePath,
-            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+            relativePath: path.join('Album Artist', 'Album Title', '01 - One.wav'),
         };
     };
 
@@ -507,7 +507,7 @@ test('continues after a failed track and reuses later staged tracks on retry', a
         })
     ).rejects.toMatchObject({
         failureCode: 'CDN_FETCH_FAILED',
-        trackId: 't1',
+        trackId: 't2',
         albumCompletedTracks: 1,
         albumTotalTracks: 2,
     });
@@ -522,7 +522,7 @@ test('continues after a failed track and reuses later staged tracks on retry', a
                 'staging',
                 'Album Artist',
                 'Album Title',
-                '02 - Two.wav'
+                '01 - One.wav'
             )
         )
     ).resolves.toBeTruthy();
@@ -530,14 +530,14 @@ test('continues after a failed track and reuses later staged tracks on retry', a
     const retryCalls = [];
     const retryExecutor = async ({ id, config: trackConfig }) => {
         retryCalls.push(id);
-        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav');
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
         return {
             success: true,
             id,
             finalFile: filePath,
-            relativePath: path.join('Album Artist', 'Album Title', '01 - One.wav'),
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
         };
     };
 
@@ -551,10 +551,10 @@ test('continues after a failed track and reuses later staged tracks on retry', a
         publishLock: new InMemoryPublishLock(),
     });
 
-    expect(retryCalls).toEqual(['t1']);
+    expect(retryCalls).toEqual(['t2']);
     expect(result.tracks.map((track) => track.action || 'downloaded')).toEqual([
-        'downloaded',
         'resumed-staged-track',
+        'downloaded',
     ]);
     await expect(
         fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
