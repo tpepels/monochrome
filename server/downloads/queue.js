@@ -928,6 +928,7 @@ export class MemoryDownloadQueue {
                     totalTracks: Number(result.totalTracks || 0),
                     warnings: Array.isArray(result.warnings) ? result.warnings : [],
                     partialPublished: false,
+                    previousPartialPublishedAt: job.partialPublishedAt || null,
                     albumTitle: job.album?.title || job.album?.name || null,
                 };
                 job.missingTracks = job.result.missingTracks;
@@ -974,6 +975,7 @@ export class MemoryDownloadQueue {
             job.failureCode = null;
             job.diagnostics = null;
             job.retryable = false;
+            job.partialPublishedAt = null;
             job.completedAt = timestamp;
             job.updatedAt = timestamp;
             await this.persistJob(job);
