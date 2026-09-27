@@ -120,6 +120,8 @@ function buildFailureDiagnostics(error, job, failedAt) {
             phase: progress.phase || job.publicationPhase || null,
             progressMessage: progress.message || null,
             currentTrack: diagnosticTrackId,
+            failedTrack: progress.failedTrack || diagnosticTrackId,
+            failedTracks: Array.isArray(progress.failedTracks) ? progress.failedTracks : [],
             currentTrackTitle: currentTrack?.title || currentTrack?.name || null,
             completedTracks: numberOrNull(progress.completedTracks),
             totalTracks: numberOrNull(progress.totalTracks),
@@ -876,8 +878,8 @@ export class MemoryDownloadQueue {
     updateAlbumProgress(job, event) {
         if (!event || job.status === DOWNLOAD_JOB_STATUSES.CANCELLED) return;
         const timestamp = nowIso();
-        const totalTracks = Number(event.totalTracks || job.progress.totalTracks || 0);
-        const completedTracks = Number(event.completedTracks || 0);
+        const totalTracks = Number(event.totalTracks ?? job.progress.totalTracks ?? 0);
+        const completedTracks = Number(event.completedTracks ?? job.progress.completedTracks ?? 0);
         const transferDownloaded = Number(event.trackTransfer?.downloadedBytes || 0);
         const transferTotal = Number(event.trackTransfer?.totalBytes || 0);
         const currentTrackFraction =
@@ -901,7 +903,8 @@ export class MemoryDownloadQueue {
             totalTracks,
             completedTracks,
             currentTrack: event.currentTrack || null,
-            failedTrack: event.failedTrack || null,
+            failedTrack: event.failedTrack || job.progress.failedTrack || null,
+            failedTracks: Array.isArray(event.failedTracks) ? event.failedTracks : job.progress.failedTracks || [],
             trackTransfer: event.trackTransfer || null,
         };
         if (event.trackProgress) {
