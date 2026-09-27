@@ -14,6 +14,8 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain("runBulkAction('resume-cancelled')");
     expect(html).toContain('Retry all failed');
     expect(html).toContain('Resume all cancelled');
+    expect(html).toContain('http://192.168.1.200:4545/');
+    expect(html).toContain('>yt-dlp</a>');
     expect(html).toContain('Cause code');
     expect(html).toContain('Error details');
     expect(html).toContain('Copy diagnostics');

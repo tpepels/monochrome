@@ -205,7 +205,7 @@ export function showNotification(message, options = {}) {
     );
 }
 
-export function addDownloadTask(trackId, track, _filename, api, abortController) {
+export function addDownloadTask(trackId, track, _filename, api, abortController, { dismissOnly = false } = {}) {
     const container = createDownloadNotification();
 
     const taskEl = document.createElement('div');
@@ -235,10 +235,17 @@ export function addDownloadTask(trackId, track, _filename, api, abortController)
 
     downloadTasks.set(trackId, { taskEl, abortController });
 
-    taskEl.querySelector('.download-cancel').addEventListener('click', () => {
-        abortController.abort();
-        removeDownloadTask(trackId);
-    });
+    const closeButton = taskEl.querySelector('.download-cancel');
+    if (dismissOnly) {
+        closeButton.title = 'Hide download notification';
+        closeButton.setAttribute('aria-label', 'Hide download notification');
+        closeButton.addEventListener('click', () => dismissDownloadTask(trackId));
+    } else {
+        closeButton.addEventListener('click', () => {
+            abortController.abort();
+            removeDownloadTask(trackId);
+        });
+    }
 
     return { taskEl, abortController };
 }
@@ -1006,7 +1013,7 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
     }
 }
 
-function createBulkDownloadNotification(type, name, _totalItems) {
+function createBulkDownloadNotification(type, name, _totalItems, { dismissOnly = false } = {}) {
     const container = createDownloadNotification();
 
     const notifEl = document.createElement('div');
@@ -1054,10 +1061,17 @@ function createBulkDownloadNotification(type, name, _totalItems) {
     const abortController = new AbortController();
     bulkDownloadTasks.set(notifEl, { abortController });
 
-    notifEl.querySelector('.download-cancel').addEventListener('click', () => {
-        abortController.abort();
-        removeBulkDownloadTask(notifEl);
-    });
+    const closeButton = notifEl.querySelector('.download-cancel');
+    if (dismissOnly) {
+        closeButton.title = 'Hide download notification';
+        closeButton.setAttribute('aria-label', 'Hide download notification');
+        closeButton.addEventListener('click', () => dismissBulkDownloadNotification(notifEl));
+    } else {
+        closeButton.addEventListener('click', () => {
+            abortController.abort();
+            removeBulkDownloadTask(notifEl);
+        });
+    }
 
     return notifEl;
 }
