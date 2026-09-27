@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDownloadsConfig, publicConfig } from './config.js';
 import { defaultMaintenanceLock, RedisMaintenanceLock, sweepDownloadTransients } from './maintenance.js';
-import { executeAlbumDownload } from './album-pipeline.js';
+import { executeAlbumDownload, publishPartialAlbum } from './album-pipeline.js';
 import { executeTrackDownload } from './track-pipeline.js';
 
 export const DOWNLOAD_JOB_STATUSES = Object.freeze({
@@ -11,12 +11,14 @@ export const DOWNLOAD_JOB_STATUSES = Object.freeze({
     PAUSED: 'paused',
     COMPLETED: 'completed',
     FAILED: 'failed',
+    PARTIAL: 'partial',
     CANCELLED: 'cancelled',
 });
 
 const TERMINAL_STATUSES = new Set([
     DOWNLOAD_JOB_STATUSES.COMPLETED,
     DOWNLOAD_JOB_STATUSES.FAILED,
+    DOWNLOAD_JOB_STATUSES.PARTIAL,
     DOWNLOAD_JOB_STATUSES.CANCELLED,
 ]);
 
@@ -231,6 +233,9 @@ function summarizeJob(job) {
         cancelReason: job.cancelReason || null,
         requeuedAsJobId: job.requeuedAsJobId || null,
         requeuedAt: job.requeuedAt || null,
+        skippedTrackIds: Array.isArray(job.skippedTrackIds) ? job.skippedTrackIds : [],
+        missingTracks: Array.isArray(job.missingTracks) ? job.missingTracks : [],
+        partialPublishedAt: job.partialPublishedAt || null,
     };
 }
 
@@ -300,6 +305,9 @@ function createJob(payload, overrides = {}) {
         cancelReason: null,
         requeuedAsJobId: null,
         requeuedAt: null,
+        skippedTrackIds: [],
+        missingTracks: [],
+        partialPublishedAt: null,
         attempts: overrides.attempts || 0,
     };
 }
