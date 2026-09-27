@@ -43,10 +43,10 @@ function ensureSelfHostSidebarLinks() {
     const settingsItem = document.getElementById('sidebar-nav-settings');
 
     if (!document.getElementById('sidebar-nav-downloads-admin')) {
-        const downloadsItem = document.createElement('li');
-        downloadsItem.className = 'nav-item';
-        downloadsItem.id = 'sidebar-nav-downloads-admin';
-        downloadsItem.innerHTML = `
+        const item = document.createElement('li');
+        item.className = 'nav-item';
+        item.id = 'sidebar-nav-downloads-admin';
+        item.innerHTML = `
             <a href="/downloads-admin" target="_blank" rel="noopener noreferrer" title="Server Downloads">
                 <svg
                     width="24"
@@ -66,7 +66,7 @@ function ensureSelfHostSidebarLinks() {
                 <span>Downloads</span>
             </a>
         `;
-        navList.insertBefore(downloadsItem, settingsItem || null);
+        navList.insertBefore(item, settingsItem || null);
     }
 
     if (!document.getElementById('sidebar-nav-ytdlp')) {
