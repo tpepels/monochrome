@@ -107,6 +107,39 @@ test('failed retryability follows failure category and retry reuses the same job
     expect(retry.status).toBe(DOWNLOAD_JOB_STATUSES.QUEUED);
 });
 
+test('skip intent survives a restart request while the failed worker is still unwinding', async () => {
+    const cfg = config({ workerEnabled: false });
+    const queue = new MemoryDownloadQueue({ persistToDisk: false });
+    const queued = await queue.enqueue(
+        {
+            type: 'album',
+            id: 'skip-race',
+            quality: 'LOSSLESS',
+            tracks: [{ id: 'broken', title: 'Broken', trackNumber: 1 }],
+        },
+        cfg
+    );
+    const internal = queue.jobs.get(queued.jobId);
+    internal.status = DOWNLOAD_JOB_STATUSES.FAILED;
+    internal.retryable = true;
+    internal.progress = { failedTrack: 'broken', currentTrack: 'broken' };
+    queue.activeControllers.set(queued.jobId, new AbortController());
+
+    const requested = await queue.skipFailedTrack(queued.jobId, cfg);
+
+    expect(requested.skippedTrackIds).toEqual(['broken']);
+    expect(internal.restartRequested).toBe(true);
+    expect(internal.restartPreserveSkippedTracks).toBe(true);
+    expect(internal.restartMessage).toBe('Queued to continue with unavailable track skipped');
+
+    queue.activeControllers.delete(queued.jobId);
+    queue.resetJobForRetry(internal, internal.restartMessage, {
+        preserveSkippedTracks: internal.restartPreserveSkippedTracks,
+    });
+
+    expect(queue.get(queued.jobId).skippedTrackIds).toEqual(['broken']);
+});
+
 test('retry keeps the same job but moves it behind already queued work', async () => {
     const cfg = config({ workerEnabled: false });
     const queue = new MemoryDownloadQueue({ persistToDisk: false });
