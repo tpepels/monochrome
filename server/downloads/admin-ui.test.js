@@ -25,6 +25,10 @@ test('serves a standalone download admin page without Monochrome frontend assets
     expect(html).toContain('Alternate candidates');
     expect(html).toContain('Alternate rejection');
     expect(html).toContain('Alternate best score');
+    expect(html).toContain('yt-dlp fallback attempted');
+    expect(html).toContain('yt-dlp fallback provider');
+    expect(html).toContain('Fallback audio:');
+    expect(html).toContain('not Tracks lossless');
     expect(html).toContain('Error details');
     expect(html).toContain('Copy diagnostics');
     expect(html).toContain('diagnostic-json');
