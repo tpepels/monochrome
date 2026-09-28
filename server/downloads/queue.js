@@ -203,9 +203,15 @@ function summarizeJob(job) {
             ? job.album?.title || job.album?.name || `Album ${job.id}`
             : job.track?.title || job.track?.name || `Track ${job.id}`;
 
+    const displayType =
+        job.type === 'album'
+            ? String(job.album?.type || job.album?.releaseType || 'album').trim().toLowerCase()
+            : job.type;
+
     return {
         jobId: job.jobId,
         type: job.type,
+        displayType,
         id: job.id,
         quality: job.quality,
         displayName,

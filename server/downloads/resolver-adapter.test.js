@@ -119,12 +119,14 @@ describe('server resolver adapter', () => {
         });
     });
 
-    test('uses queued album metadata without an additional metadata provider', async () => {
+    test('uses queued metadata directly for a non-Tracks album', async () => {
         const tracksApi = { getAlbum: vi.fn() };
         const facade = new MonochromeResolverFacade({ tracksApi });
         const album = {
-            id: 'alb1',
+            id: 'apple:album:alb1',
+            provider: 'apple',
             title: 'Album',
+            numberOfTracks: 2,
             cover: 'https://images.example/album.jpg',
             artist: { name: 'Artist' },
         };
@@ -133,21 +135,86 @@ describe('server resolver adapter', () => {
             { id: 't2', title: 'Two', trackNumber: 2, volumeNumber: 1, album: {} },
         ];
 
-        const result = await facade.resolveAlbum('alb1', { album, tracks });
+        const result = await facade.resolveAlbum('apple:album:alb1', { album, tracks });
 
         expect(tracksApi.getAlbum).not.toHaveBeenCalled();
         expect(result.tracks).toHaveLength(2);
-        expect(result.tracks[0].downloadOrder.trackNumber).toBe(1);
-        expect(result.tracks[1].downloadOrder.trackNumber).toBe(2);
+        expect(result.totalTracks).toBe(2);
         expect(result.tracks[0].album).toMatchObject({
-            id: 'alb1',
+            id: 'apple:album:alb1',
             title: 'Album',
             artist: { name: 'Artist' },
             releaseDate: '',
             cover: 'https://images.example/album.jpg',
         });
-        expect(result.tracks[1].album.artist.name).toBe('Artist');
-        expect(result.coverUrl).toBe('https://images.example/album.jpg');
+    });
+
+    test('refetches canonical Tracks release instead of trusting a truncated browser track list', async () => {
+        const tracksApi = {
+            getAlbum: vi.fn(async () => ({
+                album: {
+                    id: '166605451025399808',
+                    provider: 'tracks',
+                    title: 'Solipsism',
+                    numberOfTracks: 3,
+                    trackCount: 3,
+                    artist: { name: 'Joep Beving' },
+                },
+                tracks: [
+                    { id: 't1', title: 'One', trackNumber: 1, volumeNumber: 1, album: {} },
+                    { id: 't2', title: 'Two', trackNumber: 2, volumeNumber: 1, album: {} },
+                    { id: 't3', title: 'Three', trackNumber: 3, volumeNumber: 1, album: {} },
+                ],
+            })),
+        };
+        const facade = new MonochromeResolverFacade({ tracksApi });
+
+        const result = await facade.resolveAlbum('166605451025399808', {
+            album: {
+                id: '166605451025399808',
+                provider: 'tracks',
+                title: 'Solipsism',
+                numberOfTracks: 3,
+                artist: { name: 'Joep Beving' },
+            },
+            tracks: [{ id: 't1', title: 'One', trackNumber: 1, volumeNumber: 1, album: {} }],
+        });
+
+        expect(tracksApi.getAlbum).toHaveBeenCalledWith('166605451025399808');
+        expect(result.tracks).toHaveLength(3);
+        expect(result.totalTracks).toBe(3);
+    });
+
+    test('rejects a canonical release whose returned track list is incomplete', async () => {
+        const tracksApi = {
+            getAlbum: vi.fn(async () => ({
+                album: {
+                    id: '166605451025399808',
+                    provider: 'tracks',
+                    title: 'Solipsism',
+                    numberOfTracks: 11,
+                    trackCount: 11,
+                    artist: { name: 'Joep Beving' },
+                },
+                tracks: [{ id: 't1', title: 'Only One', trackNumber: 1, volumeNumber: 1, album: {} }],
+            })),
+        };
+        const facade = new MonochromeResolverFacade({ tracksApi });
+
+        await expect(
+            facade.resolveAlbum('166605451025399808', {
+                album: {
+                    id: '166605451025399808',
+                    provider: 'tracks',
+                    title: 'Solipsism',
+                },
+                tracks: [{ id: 't1', title: 'Only One', trackNumber: 1, volumeNumber: 1, album: {} }],
+            })
+        ).rejects.toMatchObject({
+            failureCode: 'RESOLVER_FETCH_FAILED',
+            expectedTrackCount: 11,
+            resolvedTrackCount: 1,
+        });
     });
 
     test('falls back to Tracks album metadata when it was not queued', async () => {
