@@ -417,7 +417,7 @@ function renderJobs(data) {
             '<div class="job-head">' +
                 '<div>' +
                     '<div class="job-title">' + esc(title) + '</div>' +
-                    '<div class="job-meta">' + esc(job.type) + ' · ' + esc(job.quality) + ' · ' + esc(job.id) + '</div>' +
+                    '<div class="job-meta">' + esc(job.displayType || job.type) + ' · ' + esc(job.quality) + ' · ' + esc(job.id) + '</div>' +
                 '</div>' +
                 '<span class="badge ' + esc(job.status) + '">' + esc(job.status) + '</span>' +
             '</div>' +
