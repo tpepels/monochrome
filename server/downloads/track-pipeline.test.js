@@ -386,6 +386,157 @@ test('falls back to a strict alternate track stream after primary CDN retries ar
     expect(await fs.readFile(result.finalFile)).toEqual(audio);
 });
 
+test('falls back to the local yt-dlp service after Tracks and alternate Tracks fail', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const primary = resolvedTrack({
+        streamUrl: 'https://tracks.test/broken.wav',
+        sourceUrl: 'https://tracks.test/broken.wav',
+    });
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 0,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-alternate-candidates',
+            };
+        },
+    };
+    const requests = [];
+    const progress = [];
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-ytdlp-fallback',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+            ytDlpFallbackUrl: 'http://yt-dlp-server:4545',
+            ytDlpFallbackTimeoutMs: 5_000,
+            cdnBackoffBaseMs: 1,
+            cdnBackoffMaxMs: 2,
+        },
+        resolver,
+        track: primary.metadata,
+        fetchImpl: async (url, options = {}) => {
+            requests.push({ url: String(url), options });
+            if (String(url) === 'https://tracks.test/broken.wav') {
+                return new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                });
+            }
+            if (String(url) === 'http://yt-dlp-server:4545/api/fallback-track') {
+                const payload = JSON.parse(options.body);
+                expect(payload).toMatchObject({
+                    artist: 'Track Artist',
+                    title: 'Track Title',
+                    album: 'Album Title',
+                    duration: 2,
+                });
+                return new Response(audio, {
+                    status: 200,
+                    headers: {
+                        'content-type': 'audio/wav',
+                        'x-fallback-provider': 'spotdl',
+                        'x-fallback-query': 'Track Artist - Track Title',
+                    },
+                });
+            }
+            return new Response('missing', { status: 404 });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        onProgress: (event) => progress.push(event),
+    });
+
+    expect(requests.filter((request) => request.url === 'https://tracks.test/broken.wav')).toHaveLength(3);
+    expect(requests.filter((request) => request.url.includes('/api/fallback-track'))).toHaveLength(1);
+    expect(progress).toContainEqual(
+        expect.objectContaining({
+            ytDlpFallback: true,
+            ytDlpFallbackProvider: 'spotdl',
+        })
+    );
+    expect(result.resolved).toMatchObject({
+        provider: 'yt-dlp-fallback',
+        fallbackSource: 'yt-dlp',
+        fallbackProvider: 'spotdl',
+        fallbackQuery: 'Track Artist - Track Title',
+        metadata: primary.metadata,
+    });
+    expect(result.relativePath).toBe(path.join('Album Artist', 'Album Title', '01 - Track Title.wav'));
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('reports yt-dlp fallback failure without losing Tracks diagnostics', async () => {
+    const primary = resolvedTrack({
+        streamUrl: 'https://tracks.test/broken.wav',
+        sourceUrl: 'https://tracks.test/broken.wav',
+    });
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 4,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-safe-alternate-match',
+            };
+        },
+    };
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            quality: 'LOSSLESS',
+            jobId: 'job-ytdlp-fallback-fail',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+                ytDlpFallbackUrl: 'http://yt-dlp-server:4545',
+                ytDlpFallbackTimeoutMs: 5_000,
+                cdnBackoffBaseMs: 1,
+                cdnBackoffMaxMs: 2,
+            },
+            resolver,
+            track: primary.metadata,
+            fetchImpl: async (url) => {
+                if (String(url) === 'https://tracks.test/broken.wav') {
+                    return new Response('bad gateway', {
+                        status: 502,
+                        headers: { 'retry-after': '0' },
+                    });
+                }
+                return new Response(
+                    JSON.stringify({ ok: false, error: 'No safe spotDL match.' }),
+                    { status: 409, headers: { 'content-type': 'application/json' } }
+                );
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'YTDLP_FALLBACK_FAILED',
+        status: 409,
+        originalTrackId: 'track1',
+        alternateSearchAttempted: true,
+        alternateCandidatesConsidered: 4,
+        alternateBestMatchScore: 0,
+        alternateReason: 'no-safe-alternate-match',
+        ytDlpFallbackAttempted: true,
+        ytDlpFallbackProvider: 'spotdl',
+    });
+});
+
 test('records alternate search diagnostics when no safe fallback exists', async () => {
     const config = {
         tempRoot: path.join(root, 'tmp'),
