@@ -732,6 +732,140 @@ async function downloadResolvedTrackToTemp(
     });
 }
 
+async function downloadYtDlpFallbackToTemp(
+    originalResolved,
+    tempFile,
+    {
+        track = null,
+        fallbackBaseUrl = null,
+        fallbackTimeoutMs = 10 * 60 * 1000,
+        fetchImpl = fetch,
+        fsOps = fs,
+        signal = null,
+        onProgress = null,
+    } = {}
+) {
+    const baseUrl = String(fallbackBaseUrl || '').trim().replace(/\/+$/, '');
+    if (!baseUrl) return null;
+
+    const metadata = originalResolved?.metadata || track || {};
+    const artist = getArtistName(metadata);
+    const title = getTrackTitle(metadata);
+    const album = getAlbumTitle(metadata);
+
+    if (!artist || artist === 'Unknown Artist' || !title || title === 'Unknown Title') {
+        return null;
+    }
+
+    const endpoint = baseUrl + '/api/fallback-track';
+    onProgress?.({
+        ytDlpFallback: true,
+        ytDlpFallbackProvider: 'spotdl',
+        ytDlpFallbackMessage: 'Trying yt-dlp fallback',
+    });
+
+    const controller = new AbortController();
+    const onAbort = () =>
+        controller.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener?.('abort', onAbort, { once: true });
+
+    const timeout = setTimeout(() => {
+        controller.abort(
+            pipelineError(
+                'yt-dlp fallback timed out after ' + Math.round(fallbackTimeoutMs / 1000) + ' seconds',
+                'YTDLP_FALLBACK_FAILED',
+                { fallbackUrl: endpoint }
+            )
+        );
+    }, fallbackTimeoutMs);
+
+    let response;
+    try {
+        response = await fetchImpl(endpoint, {
+            method: 'POST',
+            headers: {
+                accept: 'audio/*,application/json;q=0.5',
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                artist,
+                title,
+                album,
+                duration: Number(originalResolved?.duration || metadata?.duration || 0) || null,
+            }),
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (signal?.aborted) throw signal.reason || error;
+        const reason = controller.signal.reason;
+        if (controller.signal.aborted && reason?.failureCode === 'YTDLP_FALLBACK_FAILED') throw reason;
+        throw pipelineError(
+            'yt-dlp fallback request failed: ' + (error?.message || String(error)),
+            'YTDLP_FALLBACK_FAILED',
+            { fallbackUrl: endpoint, cause: error }
+        );
+    } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.('abort', onAbort);
+    }
+
+    if (!response.ok) {
+        let detail = null;
+        try {
+            const body = await response.json();
+            detail = body?.error || body?.detail || null;
+        } catch {
+            detail = await response.text().catch(() => '');
+        }
+        throw pipelineError(
+            'yt-dlp fallback unavailable: ' + (detail || ('HTTP ' + response.status)),
+            'YTDLP_FALLBACK_FAILED',
+            {
+                status: response.status,
+                fallbackUrl: endpoint,
+                fallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+            }
+        );
+    }
+
+    await fsOps.rm(tempFile, { force: true }).catch(() => {});
+    await writeResponseBodyToFile(response, tempFile, {
+        fsOps,
+        append: false,
+        onProgress: (progress) =>
+            onProgress?.({
+                ...progress,
+                ytDlpFallback: true,
+                ytDlpFallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+            }),
+    });
+
+    return {
+        ...originalResolved,
+        provider: 'yt-dlp-fallback',
+        providerInstance: null,
+        providerErrors: [],
+        streamUrl: null,
+        sourceUrl: null,
+        proxiedStreamUrl: null,
+        manifest: null,
+        manifestKind: 'fallback',
+        manifestMimeType: response.headers.get('content-type') || null,
+        manifestDetails: inspectManifest(null),
+        dash: null,
+        segments: [],
+        urls: [],
+        decryptionKey: null,
+        keyId: null,
+        mediaMimeType: response.headers.get('content-type') || 'audio/ogg',
+        externalStreamType: 'fallback',
+        qualityDisplay: 'yt-dlp fallback',
+        fallbackSource: 'yt-dlp',
+        fallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+        fallbackQuery: response.headers.get('x-fallback-query') || (artist + ' - ' + title),
+    };
+}
 function assertNotPreview(resolved) {
     const flags = resolved.presentationFlags || {};
     const values = [
@@ -903,79 +1037,125 @@ export async function executeTrackDownload({
                     Number(process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS || 5 * 60 * 1000),
             });
         } catch (primaryError) {
-            if (
-                signal?.aborted ||
-                primaryError?.failureCode !== 'CDN_FETCH_FAILED' ||
-                typeof resolver.resolveAlternateTrackDownload !== 'function'
-            ) {
+            if (signal?.aborted || primaryError?.failureCode !== 'CDN_FETCH_FAILED') {
                 throw primaryError;
             }
 
-            const alternate = await resolver.resolveAlternateTrackDownload(id, quality, { track, signal });
+            let tracksFailure = primaryError;
+            let alternate = null;
+            let alternateSucceeded = false;
             const primaryUrl = resolved?.streamUrl || resolved?.sourceUrl || null;
-            const alternateUrl = alternate?.streamUrl || alternate?.sourceUrl || null;
 
-            if (alternate?.alternateUnavailable) {
-                try {
-                    primaryError.originalTrackId = alternate.originalTrackId || String(id);
-                    primaryError.alternateSearchAttempted = Boolean(alternate.alternateSearchAttempted);
-                    primaryError.alternateCandidatesConsidered = Number(alternate.alternateCandidatesConsidered || 0);
-                    primaryError.alternateBestMatchScore = Number(alternate.alternateBestMatchScore || 0);
-                    primaryError.alternateReason = alternate.alternateReason || 'no-safe-alternate-match';
-                    primaryError.alternateSearchError = alternate.alternateSearchError || null;
-                } catch {
-                    // Preserve the primary transfer failure if it is non-extensible.
+            if (typeof resolver.resolveAlternateTrackDownload === 'function') {
+                alternate = await resolver.resolveAlternateTrackDownload(id, quality, { track, signal });
+                const alternateUrl = alternate?.streamUrl || alternate?.sourceUrl || null;
+
+                if (alternate?.alternateUnavailable) {
+                    try {
+                        tracksFailure.originalTrackId = alternate.originalTrackId || String(id);
+                        tracksFailure.alternateSearchAttempted = Boolean(alternate.alternateSearchAttempted);
+                        tracksFailure.alternateCandidatesConsidered = Number(alternate.alternateCandidatesConsidered || 0);
+                        tracksFailure.alternateBestMatchScore = Number(alternate.alternateBestMatchScore || 0);
+                        tracksFailure.alternateReason = alternate.alternateReason || 'no-safe-alternate-match';
+                        tracksFailure.alternateSearchError = alternate.alternateSearchError || null;
+                    } catch {
+                        // Keep the original Tracks failure if it is non-extensible.
+                    }
+                } else if (alternate && alternateUrl && alternateUrl !== primaryUrl) {
+                    await fsOps.rm(tempFile, { force: true }).catch(() => {});
+                    onProgress?.({
+                        alternateSource: true,
+                        originalTrackId: alternate.originalTrackId || String(id),
+                        alternateTrackId: alternate.alternateTrackId || null,
+                        alternateMatchScore: alternate.alternateMatchScore ?? null,
+                        alternateExactRecordingId: Boolean(alternate.alternateExactRecordingId),
+                        alternateExactIsrc: Boolean(alternate.alternateExactIsrc),
+                        alternateDurationVerified: Boolean(alternate.alternateDurationVerified),
+                        alternateDurationUnavailable: Boolean(alternate.alternateDurationUnavailable),
+                        alternateCandidatesConsidered: Number(alternate.alternateCandidatesConsidered || 0),
+                    });
+
+                    try {
+                        await downloadResolvedTrackToTemp(alternate, tempFile, {
+                            jobTempDir,
+                            fetchImpl,
+                            fsOps,
+                            signal,
+                            env,
+                            timeoutMs: config.fetchTimeoutMs,
+                            onProgress,
+                            cdnBackoffBaseMs:
+                                config.cdnBackoffBaseMs ??
+                                Number(process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS || 5000),
+                            cdnBackoffMaxMs:
+                                config.cdnBackoffMaxMs ??
+                                Number(process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS || 5 * 60 * 1000),
+                        });
+                        resolved = alternate;
+                        alternateSucceeded = true;
+                    } catch (alternateError) {
+                        try {
+                            alternateError.originalTrackId = alternate.originalTrackId || String(id);
+                            alternateError.alternateTrackId = alternate.alternateTrackId || null;
+                            alternateError.alternateMatchScore = alternate.alternateMatchScore ?? null;
+                            alternateError.primaryFailureCode = primaryError?.failureCode || null;
+                            alternateError.primaryStatus = Number.isFinite(Number(primaryError?.status))
+                                ? Number(primaryError.status)
+                                : null;
+                        } catch {
+                            // Preserve the alternate transfer error if it is non-extensible.
+                        }
+                        tracksFailure = alternateError;
+                    }
                 }
-                throw primaryError;
             }
 
-            if (!alternate || !alternateUrl || alternateUrl === primaryUrl) {
-                throw primaryError;
-            }
-
-            await fsOps.rm(tempFile, { force: true }).catch(() => {});
-            onProgress?.({
-                alternateSource: true,
-                originalTrackId: alternate.originalTrackId || String(id),
-                alternateTrackId: alternate.alternateTrackId || null,
-                alternateMatchScore: alternate.alternateMatchScore ?? null,
-                alternateExactRecordingId: Boolean(alternate.alternateExactRecordingId),
-                alternateExactIsrc: Boolean(alternate.alternateExactIsrc),
-                alternateDurationVerified: Boolean(alternate.alternateDurationVerified),
-                alternateDurationUnavailable: Boolean(alternate.alternateDurationUnavailable),
-                alternateCandidatesConsidered: Number(alternate.alternateCandidatesConsidered || 0),
-            });
-
-            try {
-                await downloadResolvedTrackToTemp(alternate, tempFile, {
-                    jobTempDir,
-                    fetchImpl,
-                    fsOps,
-                    signal,
-                    env,
-                    timeoutMs: config.fetchTimeoutMs,
-                    onProgress,
-                    cdnBackoffBaseMs:
-                        config.cdnBackoffBaseMs ??
-                        Number(process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS || 5000),
-                    cdnBackoffMaxMs:
-                        config.cdnBackoffMaxMs ??
-                        Number(process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS || 5 * 60 * 1000),
-                });
-                resolved = alternate;
-            } catch (alternateError) {
+            if (!alternateSucceeded) {
                 try {
-                    alternateError.originalTrackId = alternate.originalTrackId || String(id);
-                    alternateError.alternateTrackId = alternate.alternateTrackId || null;
-                    alternateError.alternateMatchScore = alternate.alternateMatchScore ?? null;
-                    alternateError.primaryFailureCode = primaryError?.failureCode || null;
-                    alternateError.primaryStatus = Number.isFinite(Number(primaryError?.status))
-                        ? Number(primaryError.status)
-                        : null;
-                } catch {
-                    // Preserve the alternate transfer error if it is non-extensible.
+                    const fallbackResolved = await downloadYtDlpFallbackToTemp(resolved, tempFile, {
+                        track,
+                        fallbackBaseUrl: config.ytDlpFallbackUrl,
+                        fallbackTimeoutMs: config.ytDlpFallbackTimeoutMs,
+                        fetchImpl,
+                        fsOps,
+                        signal,
+                        onProgress,
+                    });
+                    if (!fallbackResolved) throw tracksFailure;
+                    resolved = fallbackResolved;
+                } catch (fallbackError) {
+                    if (fallbackError === tracksFailure) throw tracksFailure;
+                    try {
+                        fallbackError.primaryFailureCode = tracksFailure?.failureCode || null;
+                        fallbackError.primaryStatus = Number.isFinite(Number(tracksFailure?.status))
+                            ? Number(tracksFailure.status)
+                            : null;
+                        fallbackError.originalTrackId =
+                            tracksFailure?.originalTrackId || alternate?.originalTrackId || String(id);
+                        fallbackError.alternateTrackId =
+                            tracksFailure?.alternateTrackId || alternate?.alternateTrackId || null;
+                        fallbackError.alternateSearchAttempted =
+                            Boolean(tracksFailure?.alternateSearchAttempted) ||
+                            Boolean(alternate?.alternateSearchAttempted);
+                        fallbackError.alternateCandidatesConsidered = Number(
+                            tracksFailure?.alternateCandidatesConsidered ||
+                                alternate?.alternateCandidatesConsidered ||
+                                0
+                        );
+                        fallbackError.alternateBestMatchScore = Number(
+                            tracksFailure?.alternateBestMatchScore ||
+                                alternate?.alternateBestMatchScore ||
+                                0
+                        );
+                        fallbackError.alternateReason =
+                            tracksFailure?.alternateReason || alternate?.alternateReason || null;
+                        fallbackError.ytDlpFallbackAttempted = true;
+                        fallbackError.ytDlpFallbackProvider = 'spotdl';
+                    } catch {
+                        // Preserve the fallback failure if it is non-extensible.
+                    }
+                    throw fallbackError;
                 }
-                throw alternateError;
             }
         }
 

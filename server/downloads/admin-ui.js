@@ -207,6 +207,10 @@ function renderError(job) {
             diagnosticRow('Alternate search error', error.alternateSearchError),
             diagnosticRow('Original track ID', error.originalTrackId, true),
             diagnosticRow('Alternate track ID', error.alternateTrackId, true),
+            diagnosticRow('yt-dlp fallback attempted', error.ytDlpFallbackAttempted ? 'yes' : null),
+            diagnosticRow('yt-dlp fallback provider', error.ytDlpFallbackProvider),
+            diagnosticRow('yt-dlp fallback URL', error.ytDlpFallbackUrl, true),
+            diagnosticRow('yt-dlp fallback HTTP', error.ytDlpFallbackStatus),
             diagnosticRow('Cause', error.causeName),
             diagnosticRow('Cause code', error.causeCode, true),
             diagnosticRow('Cause message', error.causeMessage),
@@ -357,6 +361,19 @@ function jobDetails(job) {
             missingTracks.map(function (track) {
                 return esc(track.title || ('track ' + track.trackId));
             }).join(', ')
+        );
+    }
+    const fallbackTracks =
+        job.result && Array.isArray(job.result.fallbackTracks)
+            ? job.result.fallbackTracks
+            : [];
+    if (fallbackTracks.length) {
+        lines.push(
+            '<strong>Fallback audio:</strong> ' +
+            fallbackTracks.map(function (track) {
+                return esc(track.title || ('track ' + track.trackId));
+            }).join(', ') +
+            ' <span class="small">(yt-dlp/spotDL - not Tracks lossless)</span>'
         );
     }
     if (job.status === 'partial') {

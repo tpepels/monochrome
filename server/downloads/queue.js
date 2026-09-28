@@ -32,6 +32,7 @@ const RETRYABLE_FAILURE_CODES = new Set([
     'PUBLISH_LOCK_BUSY',
     'MAINTENANCE_LOCK_TIMEOUT',
     'TRACK_DOWNLOAD_FAILED',
+    'YTDLP_FALLBACK_FAILED',
     'ALBUM_DOWNLOAD_FAILED',
 ]);
 
@@ -118,6 +119,12 @@ function buildFailureDiagnostics(error, job, failedAt) {
             alternateSearchError: error?.alternateSearchError ? sanitizeErrorMessage(error.alternateSearchError) : null,
             primaryFailureCode: error?.primaryFailureCode || null,
             primaryStatus: numberOrNull(error?.primaryStatus),
+            ytDlpFallbackAttempted: Boolean(error?.ytDlpFallbackAttempted),
+            ytDlpFallbackProvider: error?.ytDlpFallbackProvider || null,
+            ytDlpFallbackUrl: sanitizeDiagnosticUrl(error?.fallbackUrl),
+            ytDlpFallbackStatus: numberOrNull(
+                error?.failureCode === 'YTDLP_FALLBACK_FAILED' ? error?.status : null
+            ),
             causeName: error?.cause?.name || null,
             causeCode: error?.cause?.code || null,
             causeMessage: error?.cause?.message ? sanitizeErrorMessage(error.cause.message) : null,
@@ -945,6 +952,7 @@ export class MemoryDownloadQueue {
                     completedTracks: Number(result.completedTracks || 0),
                     totalTracks: Number(result.totalTracks || 0),
                     warnings: Array.isArray(result.warnings) ? result.warnings : [],
+                    fallbackTracks: Array.isArray(result.fallbackTracks) ? result.fallbackTracks : [],
                     partialPublished: false,
                     previousPartialPublishedAt: job.partialPublishedAt || null,
                     albumTitle: job.album?.title || job.album?.name || null,
@@ -987,6 +995,22 @@ export class MemoryDownloadQueue {
                 relativePath: result.relativePath || null,
                 publishMethod: result.publishMethod || null,
                 warnings: Array.isArray(result.warnings) ? result.warnings : [],
+                fallbackTracks:
+                    job.type === 'album'
+                        ? Array.isArray(result.fallbackTracks)
+                            ? result.fallbackTracks
+                            : []
+                        : result.resolved?.fallbackSource
+                          ? [
+                                {
+                                    trackId: String(result.resolved?.id || job.id),
+                                    title: result.resolved?.metadata?.title || job.track?.title || null,
+                                    source: result.resolved?.fallbackSource || null,
+                                    provider: result.resolved?.fallbackProvider || null,
+                                    query: result.resolved?.fallbackQuery || null,
+                                },
+                            ]
+                          : [],
             };
             job.progress = baseProgress('Completed', { percent: 100, phase: 'completed' });
             job.error = null;
@@ -1038,9 +1062,11 @@ export class MemoryDownloadQueue {
             ...job.progress,
             percent: transferPercent ?? job.progress.percent ?? 1,
             message:
-                transfer.cdnBackoff
-                    ? `CDN backoff - ${Number(transfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
-                    : transfer.alternateSource
+                transfer.ytDlpFallback
+                    ? 'Trying yt-dlp fallback'
+                    : transfer.cdnBackoff
+                      ? `CDN backoff - ${Number(transfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
+                      : transfer.alternateSource
                       ? 'Trying alternate track source'
                       : retryWaitSeconds > 0
                         ? `Retrying track in ${retryWaitSeconds}s`
@@ -1070,6 +1096,9 @@ export class MemoryDownloadQueue {
                 Number.isFinite(Number(transfer.cdnBackoffWaitSeconds))
                     ? Number(transfer.cdnBackoffWaitSeconds)
                     : null,
+            ytDlpFallback: Boolean(transfer.ytDlpFallback),
+            ytDlpFallbackProvider:
+                transfer.ytDlpFallbackProvider || job.progress.ytDlpFallbackProvider || null,
             alternateSource: Boolean(transfer.alternateSource),
             originalTrackId: transfer.originalTrackId || job.progress.originalTrackId || null,
             alternateTrackId: transfer.alternateTrackId || job.progress.alternateTrackId || null,
@@ -1123,9 +1152,11 @@ export class MemoryDownloadQueue {
             message:
                 event.phase === 'publishing'
                     ? 'Publishing album'
-                    : event.trackTransfer?.cdnBackoff
-                      ? `CDN backoff - ${Number(event.trackTransfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
-                      : event.trackTransfer?.alternateSource
+                    : event.trackTransfer?.ytDlpFallback
+                      ? 'Trying yt-dlp fallback'
+                      : event.trackTransfer?.cdnBackoff
+                        ? `CDN backoff - ${Number(event.trackTransfer.cdnBackoffWaitSeconds || retryWaitSeconds || 0)}s`
+                        : event.trackTransfer?.alternateSource
                         ? 'Trying alternate source for current track'
                         : retryWaitSeconds > 0
                           ? `Retrying current track in ${retryWaitSeconds}s`
@@ -1138,6 +1169,14 @@ export class MemoryDownloadQueue {
             failedTracks: Array.isArray(event.failedTracks) ? event.failedTracks : job.progress.failedTracks || [],
             missingTracks: Array.isArray(event.missingTracks) ? event.missingTracks : job.progress.missingTracks || [],
             trackTransfer: event.trackTransfer || null,
+            ytDlpFallback:
+                event.trackTransfer?.ytDlpFallback == null
+                    ? Boolean(job.progress.ytDlpFallback)
+                    : Boolean(event.trackTransfer.ytDlpFallback),
+            ytDlpFallbackProvider:
+                event.trackTransfer?.ytDlpFallbackProvider ||
+                job.progress.ytDlpFallbackProvider ||
+                null,
             originalTrackId:
                 event.trackTransfer?.originalTrackId || job.progress.originalTrackId || null,
             alternateTrackId:
