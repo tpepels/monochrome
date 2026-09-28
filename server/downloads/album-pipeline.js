@@ -481,6 +481,7 @@ export async function executeAlbumDownload({
                     id: result.id || result.resolved?.id || track.id,
                     status: 'completed',
                     finalFile: result.finalFile,
+                    source: result.resolved?.fallbackSource || result.resolved?.provider || null,
                 };
             } catch (error) {
                 if (signal?.aborted || (error?.name === 'AbortError' && signal?.aborted)) throw error;
@@ -530,6 +531,15 @@ export async function executeAlbumDownload({
         }
 
         assertNotAborted(signal);
+        const fallbackTracks = trackResults
+            .filter((result) => result?.resolved?.fallbackSource)
+            .map((result) => ({
+                trackId: String(result.resolved?.id || ''),
+                title: result.resolved?.metadata?.title || null,
+                source: result.resolved?.fallbackSource || null,
+                provider: result.resolved?.fallbackProvider || null,
+                query: result.resolved?.fallbackQuery || null,
+            }));
         const warnings = [];
         try {
             await downloadCover(albumResult, stagingAlbumDir, { fetchImpl, fsOps, signal });
@@ -582,6 +592,7 @@ export async function executeAlbumDownload({
                 completedTracks,
                 totalTracks: albumResult.tracks.length,
                 warnings,
+                fallbackTracks,
                 action: 'partial-staged',
             };
         }
@@ -617,6 +628,7 @@ export async function executeAlbumDownload({
             relativePath: albumRelativePath,
             stagingAlbumDir,
             warnings,
+            fallbackTracks,
             ...publication,
         };
     } catch (error) {
