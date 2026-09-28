@@ -50,6 +50,7 @@ export function getDownloadsConfig(env = {}) {
             DEFAULT_CDN_BACKOFF_MAX_MS
         ),
         redisUrl: readEnv(env, 'REDIS_URL') || null,
+        ytDlpFallbackUrl: readEnv(env, 'YTDLP_FALLBACK_URL') || null,
         duplicateCheckBeforeQueue: parseBoolean(readEnv(env, 'DOWNLOAD_DUPLICATE_CHECK'), false),
         albumPolicy: {
             partialPublish: false,
@@ -70,6 +71,7 @@ export function publicConfig(config) {
         cdnBackoffBaseMs: config.cdnBackoffBaseMs,
         cdnBackoffMaxMs: config.cdnBackoffMaxMs,
         redisConfigured: Boolean(config.redisUrl),
+        ytDlpFallbackConfigured: Boolean(config.ytDlpFallbackUrl),
         duplicateCheckBeforeQueue: config.duplicateCheckBeforeQueue,
         albumPolicy: config.albumPolicy,
     };
