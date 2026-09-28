@@ -145,6 +145,34 @@ describe('server download API', () => {
         });
     });
 
+    test('shows yt-dlp fallback progress for an album track', async () => {
+        const config = getDownloadsConfig(context({}).env);
+        const queued = await downloadQueue.enqueue(
+            { type: 'album', id: 'fallback-album', quality: 'HI_RES_LOSSLESS' },
+            config
+        );
+        const internal = downloadQueue.memoryQueue.jobs.get(queued.jobId);
+        internal.status = 'processing';
+
+        downloadQueue.memoryQueue.updateAlbumProgress(internal, {
+            phase: 'processing',
+            currentTrack: 'track-2',
+            totalTracks: 10,
+            completedTracks: 1,
+            trackTransfer: {
+                ytDlpFallback: true,
+                ytDlpFallbackProvider: 'spotdl',
+            },
+        });
+
+        expect(downloadQueue.memoryQueue.get(queued.jobId).progress).toMatchObject({
+            message: 'Trying yt-dlp fallback',
+            currentTrack: 'track-2',
+            ytDlpFallback: true,
+            ytDlpFallbackProvider: 'spotdl',
+        });
+    });
+
     test('requeues interrupted jobs during recovery', async () => {
         const config = getDownloadsConfig(context({}).env);
         const job = await downloadQueue.enqueue({ type: 'album', id: 'resume-album', quality: 'LOSSLESS' }, config);
