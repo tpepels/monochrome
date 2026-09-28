@@ -8,6 +8,65 @@
 export const TRACKS_API_BASE_URL = 'https://tracks.monochrome.st';
 
 /**
+ * SELF-HOST INVARIANT:
+ * Browser code must never call TRACKS_API_BASE_URL directly on a self-hosted
+ * origin. nginx exposes the Tracks service at /api/provider/tracks so metadata,
+ * audio, and artwork remain same-origin and do not trip CORS.
+ *
+ * Keep TRACKS_API_BASE_URL for server-side/direct official-host use only.
+ * After upstream rebases, run: bun run check:selfhost
+ */
+export function getTracksClientBaseUrl() {
+    if (typeof window === 'undefined') return TRACKS_API_BASE_URL;
+
+    const hostname = window.location?.hostname || '';
+    const isOfficialHost =
+        hostname === 'monochrome.st' ||
+        hostname.endsWith('.monochrome.st') ||
+        hostname === 'monochrome.tf' ||
+        hostname.endsWith('.monochrome.tf');
+
+    return isOfficialHost ? TRACKS_API_BASE_URL : '/api/provider/tracks';
+}
+
+/**
+ * SELF-HOST INVARIANT:
+ * Tracks/Rythm entity IDs are snowflake-like 17-20 digit IDs. A hard browser
+ * reload loses the in-memory provider caches, so these IDs must remain
+ * intrinsically recognizable or they can be misrouted into TIDAL.
+ */
+export function isTracksSnowflake(value) {
+    return /^\d{17,20}$/.test(String(value || '').replace(/^(?:tracks|mono):(?:(?:track|album|artist):)?/, ''));
+}
+
+/**
+ * SELF-HOST INVARIANT:
+ * Tracks may return absolute artwork URLs owned by tracks.monochrome.st.
+ * Rewrite those URLs through the active browser Tracks base. This helper must
+ * stay idempotent because normalized entities can pass through it more than once.
+ */
+export function getTracksClientAssetUrl(value) {
+    if (!value) return value;
+
+    const raw = String(value);
+    if (/^(?:data:|blob:)/i.test(raw)) return raw;
+
+    const clientBase = getTracksClientBaseUrl().replace(/\/+$/, '');
+    if (raw === clientBase || raw.startsWith(clientBase + '/')) {
+        return raw;
+    }
+    if (raw.startsWith(TRACKS_API_BASE_URL + '/')) {
+        return clientBase + raw.slice(TRACKS_API_BASE_URL.length);
+    }
+    if (raw.startsWith('/')) {
+        return clientBase + raw;
+    }
+
+    return raw;
+}
+
+
+/**
  * Cleans and normalizes string for fuzzy title/artist matching.
  * @param {string} str
  * @returns {string}
@@ -42,8 +101,8 @@ export function normalizeTracksTrack(item) {
         artistId: artistId ? String(artistId) : '',
         tracksArtistId: artistId ? String(artistId) : '',
         name: artistName,
-        avatar: item.artists?.[0]?.avatar || null,
-        picture: item.artists?.[0]?.avatar || null,
+        avatar: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
+        picture: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
         provider: 'tracks',
         _href: artistId ? `/artist/${artistId}` : '',
     };
@@ -57,8 +116,8 @@ export function normalizeTracksTrack(item) {
                 artistId: aid,
                 tracksArtistId: aid,
                 name: a.name || a.displayName || 'Unknown Artist',
-                avatar: a.avatar || null,
-                picture: a.avatar || null,
+                avatar: getTracksClientAssetUrl(a.avatar) || null,
+                picture: getTracksClientAssetUrl(a.avatar) || null,
                 provider: 'tracks',
                 _href: aid ? `/artist/${aid}` : '',
             };
@@ -78,14 +137,24 @@ export function normalizeTracksTrack(item) {
     }
 
     const releaseId = item.releaseId ? String(item.releaseId) : '';
-    const artwork = item.artwork || item.cover || '';
+    const artwork = getTracksClientAssetUrl(item.artwork || item.cover || '');
     const albumTitle = item.albumTitle || item.releaseTitle || (item.release && item.release.title) || '';
+
+    const releaseArtist = item.albumArtist || item.releaseArtist || null;
+    const releaseArtists =
+        Array.isArray(item.albumArtists) && item.albumArtists.length
+            ? item.albumArtists
+            : Array.isArray(item.releaseArtists) && item.releaseArtists.length
+              ? item.releaseArtists
+              : [];
 
     const album = {
         id: releaseId,
         releaseId,
         tracksReleaseId: releaseId,
         title: albumTitle,
+        artist: releaseArtist,
+        artists: releaseArtists,
         cover: artwork,
         releaseDate: item.releaseDate || '',
         _href: releaseId ? `/album/${releaseId}` : '',
@@ -122,7 +191,7 @@ export function normalizeTracksTrack(item) {
         isUnavailable: item.playable === false,
         audioModes: ['LOSSLESS', 'STEREO'],
         audioQuality: 'LOSSLESS',
-        url: `${TRACKS_API_BASE_URL}/track/${trackId}`,
+        url: `${getTracksClientBaseUrl()}/track/${trackId}`,
         _href: `/track/${trackId}`,
     };
 }
@@ -146,7 +215,7 @@ export function normalizeTracksRelease(item) {
         artistId: artistId ? String(artistId) : '',
         tracksArtistId: artistId ? String(artistId) : '',
         name: artistName,
-        avatar: item.artists?.[0]?.avatar || null,
+        avatar: getTracksClientAssetUrl(item.artists?.[0]?.avatar) || null,
         provider: 'tracks',
         _href: artistId ? `/artist/${artistId}` : '',
     };
@@ -160,14 +229,14 @@ export function normalizeTracksRelease(item) {
                       artistId: aid,
                       tracksArtistId: aid,
                       name: a.name || a.displayName || 'Unknown Artist',
-                      avatar: a.avatar || null,
+                      avatar: getTracksClientAssetUrl(a.avatar) || null,
                       provider: 'tracks',
                       _href: aid ? `/artist/${aid}` : '',
                   };
               })
             : [primaryArtist];
 
-    const artwork = item.artwork || item.cover || '';
+    const artwork = getTracksClientAssetUrl(item.artwork || item.cover || '');
     const trackCount = item.trackCount || (Array.isArray(item.tracks) ? item.tracks.length : 0);
 
     return {
@@ -201,7 +270,7 @@ export function normalizeTracksArtist(item) {
     if (!item) return null;
     const artistId = String(item.artistId || item.id || '');
     const id = artistId;
-    const picture = item.avatar || item.picture || null;
+    const picture = getTracksClientAssetUrl(item.avatar || item.picture) || null;
     const name = item.displayName || item.name || 'Unknown Artist';
 
     return {
@@ -214,7 +283,7 @@ export function normalizeTracksArtist(item) {
         username: item.username || '',
         picture,
         avatar: picture,
-        banner: item.banner || null,
+        banner: getTracksClientAssetUrl(item.banner) || null,
         biography: item.bio || item.biography || '',
         popularity: 0,
         artistRoles: [],
@@ -231,7 +300,10 @@ export function normalizeTracksPlaylist(item) {
     if (!item) return null;
     const playlistId = String(item.playlistId || item.id || '');
     const id = playlistId;
-    const image = typeof item.thumbnail === 'string' && item.thumbnail.startsWith('http') ? item.thumbnail : '';
+    const image =
+        typeof item.thumbnail === 'string' && item.thumbnail
+            ? getTracksClientAssetUrl(item.thumbnail)
+            : '';
 
     return {
         id,
@@ -345,6 +417,74 @@ export function extractTracksSuggestions(results, query) {
  * @param {Object} target
  * @returns {number} Score (higher is better, 100+ is a strong match)
  */
+function strictIdentityString(value) {
+    return String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function primaryArtistName(track) {
+    return (
+        track?.artist?.name ||
+        track?.artistNames?.[0] ||
+        track?.artists?.[0]?.name ||
+        (typeof track?.artist === 'string' ? track.artist : '')
+    );
+}
+
+function durationSeconds(track) {
+    const value = Number(track?.duration || 0);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return value > 1000 ? Math.round(value / 1000) : Math.round(value);
+}
+
+/**
+ * Scores only candidates safe enough to use as a replacement audio source for
+ * an already identified track. This is intentionally stricter than the normal
+ * metadata resolver.
+ *
+ * 300 = exact recordingId
+ * 250 = exact ISRC
+ * 190 = exact full title + exact primary artist + duration within 3 seconds
+ * 160 = exact full title + exact primary artist, but duration is unavailable
+ *   0 = reject
+ */
+export function scoreAlternateTrackCandidate(candidate, target) {
+    if (!candidate || !target) return 0;
+
+    const targetRecordingId = String(target.recordingId || '').trim();
+    const candidateRecordingId = String(candidate.recordingId || '').trim();
+    if (targetRecordingId && candidateRecordingId && targetRecordingId === candidateRecordingId) {
+        return 300;
+    }
+
+    const targetIsrc = String(target.isrc || '').trim().toLowerCase();
+    const candidateIsrc = String(candidate.isrc || '').trim().toLowerCase();
+    if (targetIsrc && candidateIsrc && targetIsrc === candidateIsrc) {
+        return 250;
+    }
+
+    const targetTitle = strictIdentityString(target.title);
+    const candidateTitle = strictIdentityString(candidate.title);
+    if (!targetTitle || targetTitle !== candidateTitle) return 0;
+
+    const targetArtist = strictIdentityString(primaryArtistName(target));
+    const candidateArtist = strictIdentityString(primaryArtistName(candidate));
+    if (!targetArtist || targetArtist !== candidateArtist) return 0;
+
+    const targetDuration = durationSeconds(target);
+    const candidateDuration = durationSeconds(candidate);
+    if (targetDuration > 0 && candidateDuration > 0) {
+        return Math.abs(targetDuration - candidateDuration) <= 3 ? 190 : 0;
+    }
+
+    return 160;
+}
+
 export function scoreTrackCandidate(candidate, target) {
     if (!candidate || !target) return 0;
 
@@ -673,6 +813,8 @@ export class TracksStreamerAPI {
                     ...t,
                     releaseId: data.releaseId || id,
                     albumTitle: data.title,
+                    albumArtist: album.artist,
+                    albumArtists: album.artists,
                     releaseDate: data.releaseDate,
                     artwork: t.artwork || data.artwork,
                 });
@@ -806,6 +948,104 @@ export class TracksStreamerAPI {
     }
 
     /**
+     * Finds a conservative alternate Tracks ID for a stream that remained unavailable
+     * after transfer retries. The original ID is explicitly excluded.
+     *
+     * An alternate must either share the exact ISRC (score 200), or match exact
+     * title + artist + duration within 3 seconds (score 175).
+     */
+    async resolveAlternateTrackStream(idOrTrack, quality = 'LOSSLESS', options = {}) {
+        const inputTrack = options.track || (typeof idOrTrack === 'object' ? idOrTrack : null);
+        const originalId = String(
+            options.excludeTrackId ||
+                (typeof idOrTrack === 'string' ? idOrTrack : inputTrack?.tracksTrackId || inputTrack?.id || '')
+        ).replace(/^(?:tracks|mono):(?:track:)?/, '');
+
+        const title = inputTrack?.title;
+        const artist =
+            inputTrack?.artist?.name ||
+            inputTrack?.artists?.[0]?.name ||
+            (typeof inputTrack?.artist === 'string' ? inputTrack.artist : '');
+
+        if (!title || !artist) return null;
+
+        const searchQuery = `${artist} ${title}`.trim();
+        if (!searchQuery) return null;
+
+        try {
+            const searchResult = await this.searchTracks(searchQuery, {
+                limit: 12,
+                signal: options.signal,
+                skipCache: true,
+            });
+
+            let bestCandidate = null;
+            let bestScore = 0;
+            let candidatesConsidered = 0;
+
+            for (const candidate of searchResult.items || []) {
+                const candidateId = String(candidate.tracksTrackId || candidate.trackId || candidate.id || '');
+                if (!candidateId || candidateId === originalId) continue;
+
+                candidatesConsidered += 1;
+                const score = scoreAlternateTrackCandidate(candidate, inputTrack);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            if (!bestCandidate || bestScore < 160) {
+                return {
+                    unavailable: true,
+                    alternateSearchAttempted: true,
+                    originalTrackId: originalId || null,
+                    candidatesConsidered,
+                    bestMatchScore: bestScore || 0,
+                    reason: candidatesConsidered === 0 ? 'no-alternate-candidates' : 'no-safe-alternate-match',
+                };
+            }
+
+            const alternateTrackId = String(
+                bestCandidate.tracksTrackId || bestCandidate.trackId || bestCandidate.id || ''
+            );
+            if (!alternateTrackId) {
+                return {
+                    unavailable: true,
+                    alternateSearchAttempted: true,
+                    originalTrackId: originalId || null,
+                    candidatesConsidered,
+                    bestMatchScore: bestScore || 0,
+                    reason: 'alternate-candidate-missing-id',
+                };
+            }
+
+            return {
+                ...this.getStreamUrl(alternateTrackId, quality, { track: inputTrack || bestCandidate }),
+                alternateTrackId,
+                originalTrackId: originalId || null,
+                matchScore: bestScore,
+                exactRecordingId: bestScore === 300,
+                exactIsrc: bestScore === 250,
+                durationVerified: bestScore === 190,
+                durationUnavailable: bestScore === 160,
+                candidatesConsidered,
+            };
+        } catch (error) {
+            console.warn('[TracksStreamerAPI] Failed to resolve alternate track stream:', error);
+            return {
+                unavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: originalId || null,
+                candidatesConsidered: 0,
+                bestMatchScore: 0,
+                reason: 'alternate-search-failed',
+                searchError: String(error?.message || error),
+            };
+        }
+    }
+
+    /**
      * Resolves a track stream from tracks.monochrome.st.
      * If the track is native to tracks.monochrome.st, returns immediate stream URL.
      * If external, searches by title+artist/ISRC on tracks.monochrome.st and resolves the highest quality FLAC stream.
@@ -906,4 +1146,4 @@ export class TracksStreamerAPI {
     }
 }
 
-export const tracksStreamerAPI = new TracksStreamerAPI();
+export const tracksStreamerAPI = new TracksStreamerAPI(getTracksClientBaseUrl());

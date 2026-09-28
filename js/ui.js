@@ -32,6 +32,7 @@ import {
     artistBannerSettings,
 } from './storage.js';
 import { db } from './db.js';
+import { getTracksClientBaseUrl } from './tracks-api.js';
 import { getVibrantColorFromImage } from './vibrant-color.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { authManager } from './accounts/auth.js';
@@ -732,7 +733,9 @@ export class UIRenderer {
             typeof cover === 'string' &&
             !cover.startsWith('http') &&
             !cover.startsWith('blob:') &&
-            !cover.startsWith('assets/')
+            !cover.startsWith('assets/') &&
+            !cover.startsWith('images/') &&
+            !cover.startsWith('/')
         ) {
             const formattedId = String(cover).replace(/-/g, '/');
             const tidalUrl = `https://resources.tidal.com/images/${formattedId}/320x320.jpg`;
@@ -2683,7 +2686,7 @@ export class UIRenderer {
         const sidebarText = document.getElementById('sidebar-donate-goal-text');
 
         try {
-            const response = await fetch('https://tracks.monochrome.st/goal');
+            const response = await fetch(`${getTracksClientBaseUrl()}/goal`);
             const data = await response.json();
             let percentage = 0;
 

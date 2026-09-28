@@ -1,0 +1,866 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { executeAlbumDownload, InMemoryPublishLock, publishPartialAlbum } from './album-pipeline.js';
+import { executeTrackDownload } from './track-pipeline.js';
+
+let root;
+
+beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'monochrome-album-pipeline-'));
+});
+
+afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+});
+
+function albumResult(overrides = {}) {
+    return {
+        id: 'album1',
+        metadata: {
+            id: 'album1',
+            title: 'Album Title',
+            artist: { name: 'Album Artist' },
+            cover: 'cover-id',
+        },
+        coverUrl: 'https://cover.test/cover.jpg',
+        tracks: [
+            { id: 't1', title: 'One', downloadOrder: { trackNumber: 1, discNumber: 1 } },
+            { id: 't2', title: 'Two', downloadOrder: { trackNumber: 2, discNumber: 1 } },
+        ],
+        ...overrides,
+    };
+}
+
+function resolverFor(album) {
+    return {
+        async resolveAlbum() {
+            return album;
+        },
+        async resolveTrackDownload() {
+            throw new Error('resolveTrackDownload should not be called by fake track executor');
+        },
+    };
+}
+
+function successfulTrackExecutor({ failAt = null, seenFinalDir = null } = {}) {
+    return async ({ id, config }) => {
+        if (failAt === id) {
+            const error = new Error('track failed');
+            error.failureCode = 'TRACK_FAILED';
+            throw error;
+        }
+
+        if (seenFinalDir) {
+            await expect(fs.stat(seenFinalDir)).rejects.toMatchObject({ code: 'ENOENT' });
+        }
+
+        const fileName = id === 't1' ? '01 - One.wav' : '02 - Two.wav';
+        const filePath = path.join(config.downloadRoot, 'Album Artist', 'Album Title', fileName);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, Buffer.from(`audio-${id}`));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', fileName),
+        };
+    };
+}
+
+function coverFetch() {
+    return async (url) => {
+        if (String(url) === 'https://cover.test/cover.jpg') {
+            return new Response(Buffer.from('cover'));
+        }
+        return new Response('missing', { status: 404 });
+    };
+}
+
+async function noOpMetadataEmbedder() {
+    return { embedded: true, method: 'test' };
+}
+
+function wavBuffer({ durationSeconds = 2, sampleRate = 8000 } = {}) {
+    const channels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * channels * (bitsPerSample / 8);
+    const blockAlign = channels * (bitsPerSample / 8);
+    const dataSize = durationSeconds * byteRate;
+    const buffer = Buffer.alloc(44 + dataSize);
+
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(channels, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(byteRate, 28);
+    buffer.writeUInt16LE(blockAlign, 32);
+    buffer.writeUInt16LE(bitsPerSample, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    return buffer;
+}
+
+function albumResolverWithTrackMetadataMismatch() {
+    const tracks = new Map([
+        [
+            't1',
+            {
+                id: 't1',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t1.wav',
+                manifest: null,
+                manifestDetails: { kind: 'unknown', urls: [], streamUrl: null, dash: null },
+                urls: [],
+                duration: 2,
+                isPreview: false,
+                presentationFlags: { assetPresentation: 'FULL', trackPresentation: 'FULL', isPreview: false },
+                metadata: {
+                    id: 't1',
+                    title: 'One',
+                    trackNumber: 1,
+                    artist: { name: 'Track Artist' },
+                    album: { title: 'Different Track Album', artist: { name: 'Different Track Artist' } },
+                },
+            },
+        ],
+        [
+            't2',
+            {
+                id: 't2',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t2.wav',
+                manifest: null,
+                manifestDetails: { kind: 'unknown', urls: [], streamUrl: null, dash: null },
+                urls: [],
+                duration: 2,
+                isPreview: false,
+                presentationFlags: { assetPresentation: 'FULL', trackPresentation: 'FULL', isPreview: false },
+                metadata: {
+                    id: 't2',
+                    title: 'Two',
+                    trackNumber: 2,
+                    artist: { name: 'Track Artist' },
+                    album: { title: 'Different Track Album', artist: { name: 'Different Track Artist' } },
+                },
+            },
+        ],
+    ]);
+
+    return {
+        async resolveAlbum() {
+            return albumResult();
+        },
+        async resolveTrackDownload(id) {
+            return tracks.get(id);
+        },
+    };
+}
+
+test('stages all tracks and publishes the complete album with cover atomically', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    const progress = [];
+    const fsOps = {
+        ...fs,
+        async cp() {
+            throw new Error('album publish should not copy the full staging directory');
+        },
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job1',
+        config,
+        fsOps,
+        resolver: resolverFor(albumResult()),
+        trackExecutor: successfulTrackExecutor({ seenFinalDir: finalAlbumDir }),
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+        onProgress: (event) => progress.push(event.phase),
+    });
+
+    expect(result.action).toBe('published');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(finalAlbumDir, 'cover.jpg'), 'utf8')).resolves.toBe('cover');
+    await expect(fs.stat(path.join(config.tempRoot, 'job1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job1'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
+    expect(progress).toContain('processing');
+    expect(progress).toContain('publishing');
+    expect(progress).toContain('completed');
+});
+
+test('publishes the album when the cover fetch fails', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-cover-403',
+        config,
+        resolver: resolverFor(albumResult()),
+        trackExecutor: successfulTrackExecutor(),
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cover.test/cover.jpg') {
+                return new Response('forbidden', { status: 403 });
+            }
+            return new Response('missing', { status: 404 });
+        },
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.warnings).toEqual([
+        {
+            failureCode: 'COVER_FETCH_FAILED',
+            message: 'Cover fetch failed: HTTP 403',
+            status: 403,
+        },
+    ]);
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, 'cover.jpg'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('publishes the album when the cover fetch aborts unexpectedly', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-cover-abort',
+        config,
+        resolver: resolverFor(albumResult()),
+        trackExecutor: successfulTrackExecutor(),
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cover.test/cover.jpg') {
+                throw new DOMException('cover fetch aborted internally', 'AbortError');
+            }
+            return new Response('missing', { status: 404 });
+        },
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+        failureCode: 'COVER_FETCH_FAILED',
+        message: 'cover fetch aborted internally',
+    });
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+});
+
+test('reuses validated staged tracks after an interrupted album download', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const jobId = 'job-resume';
+    const stagingAlbumDir = path.join(
+        config.downloadRoot,
+        '.monochrome-staging',
+        jobId,
+        'staging',
+        'Album Artist',
+        'Album Title'
+    );
+    await fs.mkdir(stagingAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(stagingAlbumDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    const resolvedById = new Map([
+        [
+            't1',
+            {
+                id: 't1',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t1.wav',
+                mediaMimeType: 'audio/wav',
+                duration: 2,
+                metadata: {
+                    id: 't1',
+                    title: 'One',
+                    trackNumber: 1,
+                    artist: { name: 'Album Artist' },
+                    album: { title: 'Album Title', artist: { name: 'Album Artist' } },
+                },
+            },
+        ],
+        [
+            't2',
+            {
+                id: 't2',
+                quality: 'LOSSLESS',
+                streamUrl: 'https://cdn.test/t2.wav',
+                mediaMimeType: 'audio/wav',
+                duration: 2,
+                metadata: {
+                    id: 't2',
+                    title: 'Two',
+                    trackNumber: 2,
+                    artist: { name: 'Album Artist' },
+                    album: { title: 'Album Title', artist: { name: 'Album Artist' } },
+                },
+            },
+        ],
+    ]);
+    const resolver = {
+        async resolveAlbum() {
+            return albumResult();
+        },
+        async resolveTrackDownload(id) {
+            return resolvedById.get(id);
+        },
+    };
+    const executed = [];
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        executed.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(executed).toEqual(['t2']);
+    expect(result.tracks[0].action).toBe('resumed-staged-track');
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
+    ).resolves.toBeTruthy();
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav'))
+    ).resolves.toBeTruthy();
+});
+
+test('passes queued album metadata to the resolver without shadowing it', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const queuedAlbum = {
+        id: 'album1',
+        title: 'Album Title',
+        artist: { name: 'Album Artist' },
+        cover: 'cover-id',
+    };
+    const queuedTracks = [
+        { id: 't1', title: 'One', trackNumber: 1, volumeNumber: 1 },
+        { id: 't2', title: 'Two', trackNumber: 2, volumeNumber: 1 },
+    ];
+    const calls = [];
+    const resolver = {
+        async resolveAlbum(id, options) {
+            calls.push({ id, options });
+            return albumResult();
+        },
+    };
+
+    await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-metadata',
+        config,
+        resolver,
+        album: queuedAlbum,
+        tracks: queuedTracks,
+        trackExecutor: successfulTrackExecutor(),
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(calls).toEqual([
+        {
+            id: 'album1',
+            options: { album: queuedAlbum, tracks: queuedTracks },
+        },
+    ]);
+});
+
+test('forces track files into the album metadata directory even when track metadata differs', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    const fetchImpl = async (url) => {
+        if (String(url).startsWith('https://cdn.test/')) {
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        }
+        return coverFetch()(url);
+    };
+
+    const embeddedMetadata = [];
+    await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-normalize-path',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor: executeTrackDownload,
+        fetchImpl,
+        metadataEmbedder: async (_filePath, metadata) => {
+            embeddedMetadata.push(metadata);
+            return { embedded: true, method: 'test' };
+        },
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(config.downloadRoot, 'Different Track Artist'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
+    expect(embeddedMetadata).toHaveLength(2);
+    expect(embeddedMetadata.map((metadata) => metadata.album)).toEqual(['Album Title', 'Album Title']);
+    expect(embeddedMetadata.map((metadata) => metadata.albumArtist)).toEqual(['Album Artist', 'Album Artist']);
+    expect(embeddedMetadata.map((metadata) => metadata.artist)).toEqual(['Track Artist', 'Track Artist']);
+});
+
+test('one failed track preserves staging and leaves no final album directory', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId: 'job-fail',
+            config,
+            resolver: resolverFor(albumResult()),
+            trackExecutor: successfulTrackExecutor({ failAt: 't2' }),
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+        })
+    ).rejects.toMatchObject({ failureCode: 'TRACK_FAILED' });
+
+    await expect(fs.stat(finalAlbumDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(config.tempRoot, 'job-fail'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+        fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-fail'))
+    ).resolves.toBeTruthy();
+});
+
+test('skips unavailable tracks, stages a partial album, publishes it, and later completes it', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const jobId = 'job-partial';
+    const resolver = albumResolverWithTrackMetadataMismatch();
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    const fetchImpl = async (url) => {
+        if (String(url) === 'https://cdn.test/t1.wav' || String(url) === 'https://cdn.test/t2.wav') {
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        }
+        return coverFetch()(url);
+    };
+
+    const partial = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: executeTrackDownload,
+        fetchImpl,
+        metadataEmbedder: noOpMetadataEmbedder,
+        publishLock: new InMemoryPublishLock(),
+        skipTrackIds: ['t2'],
+    });
+
+    expect(partial).toMatchObject({
+        partial: true,
+        action: 'partial-staged',
+        completedTracks: 1,
+        totalTracks: 2,
+        missingTracks: [{ trackId: 't2', title: 'Two' }],
+    });
+    await expect(fs.stat(finalAlbumDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(partial.stagingAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+
+    const publication = await publishPartialAlbum({
+        stagingAlbumDir: partial.stagingAlbumDir,
+        finalAlbumDir: partial.finalAlbumDir,
+        albumName: 'Album Title',
+        jobId,
+        publishLock: new InMemoryPublishLock(),
+    });
+    expect(publication.action).toBe('published');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const secondRunFetches = [];
+    const completed = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: executeTrackDownload,
+        fetchImpl: async (url) => {
+            if (String(url).startsWith('https://cdn.test/')) secondRunFetches.push(String(url));
+            return fetchImpl(url);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(completed.partial).toBeUndefined();
+    expect(completed.action).toBe('replaced');
+    expect(secondRunFetches).toEqual(['https://cdn.test/t2.wav']);
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+});
+
+test('fails fast on an exhausted track and reuses prior staged tracks on retry', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const jobId = 'job-fail-fast';
+    const resolver = albumResolverWithTrackMetadataMismatch();
+    const firstRunCalls = [];
+
+    const firstRunExecutor = async ({ id, config: trackConfig }) => {
+        firstRunCalls.push(id);
+        if (id === 't2') {
+            const error = new Error('track two unavailable');
+            error.failureCode = 'CDN_FETCH_FAILED';
+            throw error;
+        }
+
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '01 - One.wav'),
+        };
+    };
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId,
+            config,
+            resolver,
+            trackExecutor: firstRunExecutor,
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        trackId: 't2',
+        albumCompletedTracks: 1,
+        albumTotalTracks: 2,
+    });
+
+    expect(firstRunCalls).toEqual(['t1', 't2']);
+    await expect(
+        fs.stat(
+            path.join(
+                config.downloadRoot,
+                '.monochrome-staging',
+                jobId,
+                'staging',
+                'Album Artist',
+                'Album Title',
+                '01 - One.wav'
+            )
+        )
+    ).resolves.toBeTruthy();
+
+    const retryCalls = [];
+    const retryExecutor = async ({ id, config: trackConfig }) => {
+        retryCalls.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId,
+        config,
+        resolver,
+        trackExecutor: retryExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(retryCalls).toEqual(['t2']);
+    expect(result.tracks.map((track) => track.action || 'downloaded')).toEqual([
+        'resumed-staged-track',
+        'downloaded',
+    ]);
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
+    ).resolves.toBeTruthy();
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav'))
+    ).resolves.toBeTruthy();
+});
+
+test('restores existing album if publication fails after backup creation', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    await fs.mkdir(finalAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(finalAlbumDir, 'old.wav'), 'old');
+
+    const fsOps = {
+        ...fs,
+        async rename(from, to) {
+            if (String(from).includes('.Album Title.publishing-')) {
+                const error = new Error('publish rename failed');
+                error.code = 'EIO';
+                throw error;
+            }
+            return fs.rename(from, to);
+        },
+    };
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId: 'job-rollback',
+            config,
+            fsOps,
+            resolver: resolverFor(albumResult()),
+            trackExecutor: successfulTrackExecutor(),
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+        })
+    ).rejects.toMatchObject({ failureCode: 'ALBUM_PUBLISH_FAILED' });
+
+    await expect(fs.readFile(path.join(finalAlbumDir, 'old.wav'), 'utf8')).resolves.toBe('old');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('cancellation during staging preserves staging for resume and never publishes final album', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const controller = new AbortController();
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', `${id}.wav`);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, 'audio');
+        controller.abort();
+        return { success: true, finalFile: filePath };
+    };
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId: 'job-cancel',
+            config,
+            resolver: resolverFor(albumResult()),
+            trackExecutor,
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+            signal: controller.signal,
+        })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    await expect(fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title'))).rejects.toMatchObject({
+        code: 'ENOENT',
+    });
+    await expect(fs.stat(path.join(config.tempRoot, 'job-cancel'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(config.downloadRoot, '.monochrome-staging', 'job-cancel'))).resolves.toBeTruthy();
+});
+
+test('cancellation during publication restores the previous album without a mixed directory', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    await fs.mkdir(finalAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(finalAlbumDir, 'old.wav'), 'old');
+
+    const controller = new AbortController();
+    const fsOps = {
+        ...fs,
+        async rename(from, to) {
+            const result = await fs.rename(from, to);
+            if (String(to).includes('.Album Title.backup-')) {
+                controller.abort();
+            }
+            return result;
+        },
+    };
+
+    await expect(
+        executeAlbumDownload({
+            id: 'album1',
+            jobId: 'job-publish-cancel',
+            config,
+            fsOps,
+            resolver: resolverFor(albumResult()),
+            trackExecutor: successfulTrackExecutor(),
+            fetchImpl: coverFetch(),
+            publishLock: new InMemoryPublishLock(),
+            signal: controller.signal,
+        })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    await expect(fs.readFile(path.join(finalAlbumDir, 'old.wav'), 'utf8')).resolves.toBe('old');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('reuses valid tracks from a partial final album instead of downloading them again', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    await fs.mkdir(finalAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(finalAlbumDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    const executed = [];
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        executed.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-partial-final',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(executed).toEqual(['t2']);
+    expect(result.tracks[0].action).toBe('reused-final-track');
+    await expect(fs.stat(path.join(finalAlbumDir, '01 - One.wav'))).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(finalAlbumDir, '02 - Two.wav'))).resolves.toBeTruthy();
+});
+
+test('reuses valid tracks from a previous failed job staging directory', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const previousStagingDir = path.join(
+        config.downloadRoot,
+        '.monochrome-staging',
+        'old-failed-job',
+        'staging',
+        'Album Artist',
+        'Album Title'
+    );
+    await fs.mkdir(previousStagingDir, { recursive: true });
+    await fs.writeFile(path.join(previousStagingDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    const executed = [];
+    const trackExecutor = async ({ id, config: trackConfig }) => {
+        executed.push(id);
+        const filePath = path.join(trackConfig.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav');
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, wavBuffer({ durationSeconds: 2 }));
+        return {
+            success: true,
+            id,
+            finalFile: filePath,
+            relativePath: path.join('Album Artist', 'Album Title', '02 - Two.wav'),
+        };
+    };
+
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'new-retry-job',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor,
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(executed).toEqual(['t2']);
+    expect(result.tracks[0].action).toBe('reused-staged-track');
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - One.wav'))
+    ).resolves.toBeTruthy();
+    await expect(
+        fs.stat(path.join(config.downloadRoot, 'Album Artist', 'Album Title', '02 - Two.wav'))
+    ).resolves.toBeTruthy();
+});
+
+test('skips a complete existing album only when every expected track validates', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalAlbumDir = path.join(config.downloadRoot, 'Album Artist', 'Album Title');
+    await fs.mkdir(finalAlbumDir, { recursive: true });
+    await fs.writeFile(path.join(finalAlbumDir, '01 - One.wav'), wavBuffer({ durationSeconds: 2 }));
+    await fs.writeFile(path.join(finalAlbumDir, '02 - Two.wav'), wavBuffer({ durationSeconds: 2 }));
+
+    let trackExecutorCalled = false;
+    const result = await executeAlbumDownload({
+        id: 'album1',
+        jobId: 'job-skip',
+        config,
+        resolver: albumResolverWithTrackMetadataMismatch(),
+        trackExecutor: async () => {
+            trackExecutorCalled = true;
+        },
+        fetchImpl: coverFetch(),
+        publishLock: new InMemoryPublishLock(),
+    });
+
+    expect(result.action).toBe('skipped-existing-complete');
+    expect(trackExecutorCalled).toBe(false);
+});

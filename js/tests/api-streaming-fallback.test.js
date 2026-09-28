@@ -54,6 +54,17 @@ vi.mock('../platform-detection.js', () => ({
     isChrome: true,
     canBrowserStreamAtmosQuality: vi.fn(() => true),
 }));
+vi.mock('../tracks-api.js', () => ({
+    getTracksClientBaseUrl: vi.fn(() => '/api/provider/tracks'),
+    isTracksSnowflake: vi.fn((id) => /^\d{17,20}$/.test(String(id || ''))),
+    tracksStreamerAPI: {
+        resolveTrackStream: vi.fn().mockResolvedValue(null),
+        getStreamUrl: vi.fn(() => {
+            throw new Error('unsafe direct Tracks fallback should not be used');
+        }),
+    },
+}));
+
 vi.mock('../container-classes.js', () => ({
     TrackAlbum: class {},
     EnrichedAlbum: class {},
@@ -99,7 +110,7 @@ describe('LosslessAPI HiFi streaming fallback', () => {
 
     test('reports failure when Unified Playback and ISRC fallbacks cannot resolve', async () => {
         await expect(api.getStreamUrl('123', 'LOSSLESS')).rejects.toThrow(
-            'Could not resolve stream URL from Unified Playback or Deezer'
+            'Could not resolve stream URL for external track ID: 123'
         );
         expect(api.getTrack).not.toHaveBeenCalled();
     });
@@ -164,7 +175,7 @@ describe('LosslessAPI HiFi streaming fallback', () => {
         settings.getInstances.mockResolvedValue([]);
 
         await expect(api.getStreamUrl('123', 'LOSSLESS')).rejects.toThrow(
-            'Could not resolve stream URL from Unified Playback or Deezer'
+            'Could not resolve stream URL for external track ID: 123'
         );
         expect(api.getTrack).not.toHaveBeenCalled();
     });

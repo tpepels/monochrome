@@ -1,0 +1,907 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { executeTrackDownload, parseRetryAfterMs } from './track-pipeline.js';
+import { resetCdnBackoffState } from './cdn-backoff.js';
+
+let root;
+
+beforeEach(async () => {
+    process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS = '1';
+    process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS = '2';
+    resetCdnBackoffState();
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'monochrome-track-pipeline-'));
+});
+
+afterEach(async () => {
+    resetCdnBackoffState();
+    delete process.env.DOWNLOAD_CDN_BACKOFF_BASE_MS;
+    delete process.env.DOWNLOAD_CDN_BACKOFF_MAX_MS;
+    await fs.rm(root, { recursive: true, force: true });
+});
+
+function wavBuffer({ durationSeconds = 2, sampleRate = 8000 } = {}) {
+    const channels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * channels * (bitsPerSample / 8);
+    const blockAlign = channels * (bitsPerSample / 8);
+    const dataSize = durationSeconds * byteRate;
+    const buffer = Buffer.alloc(44 + dataSize);
+
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(channels, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(byteRate, 28);
+    buffer.writeUInt16LE(blockAlign, 32);
+    buffer.writeUInt16LE(bitsPerSample, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    return buffer;
+}
+
+function resolvedTrack(overrides = {}) {
+    return {
+        id: 'track1',
+        quality: 'LOSSLESS',
+        streamUrl: 'https://cdn.test/audio.wav',
+        manifest: null,
+        manifestDetails: { kind: 'unknown', urls: [], streamUrl: null, dash: null },
+        urls: [],
+        duration: 2,
+        isPreview: false,
+        presentationFlags: { assetPresentation: 'FULL', trackPresentation: 'FULL', isPreview: false },
+        metadata: {
+            id: 'track1',
+            title: 'Track Title',
+            trackNumber: 1,
+            artist: { name: 'Track Artist' },
+            album: {
+                title: 'Album Title',
+                artist: { name: 'Album Artist' },
+                releaseDate: '2024-01-01',
+            },
+            isrc: 'ISRC1',
+        },
+        isrc: 'ISRC1',
+        ...overrides,
+    };
+}
+
+function resolverFor(track) {
+    return {
+        async resolveTrackDownload() {
+            return track;
+        },
+    };
+}
+
+function fetchFor(map) {
+    return async (url) => {
+        const value = map[String(url)];
+        if (!value) return new Response('missing', { status: 404 });
+        return new Response(value);
+    };
+}
+
+async function noOpMetadataEmbedder() {
+    return { embedded: true, method: 'test' };
+}
+
+test('downloads a valid direct URL to temp, validates it, and publishes final file', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job1',
+        config,
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }),
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.relativePath).toBe(path.join('Album Artist', 'Album Title', '01 - Track Title.wav'));
+    expect(await fs.stat(result.finalFile)).toMatchObject({ size: 32044 });
+    await expect(fs.stat(path.join(config.tempRoot, 'job1'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('streams audio responses without reading the response arrayBuffer', async () => {
+    const response = new Response(wavBuffer({ durationSeconds: 2 }));
+    response.arrayBuffer = vi.fn(async () => {
+        throw new Error('arrayBuffer should not be used for audio downloads');
+    });
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-streaming',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => response,
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(response.arrayBuffer).not.toHaveBeenCalled();
+});
+
+test('retries an unexpected fetch AbortError instead of treating it as cancellation', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-unexpected-abort',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                throw new DOMException('fetch aborted internally', 'AbortError');
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        name: 'AbortError',
+        failureCode: 'CDN_FETCH_FAILED',
+        transferAttempt: 3,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+
+    expect(fetchCalls).toBe(3);
+});
+
+test('retries a transient socket reset before response headers', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const calls = [];
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-fetch-retry',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async (_url, options) => {
+            calls.push(options);
+            if (calls.length === 1) {
+                const error = new Error(
+                    'The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()'
+                );
+                error.code = 'ECONNRESET';
+                throw error;
+            }
+            return new Response(audio);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(calls).toHaveLength(2);
+    expect(calls.every((options) => options.keepalive === false)).toBe(true);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('parses Retry-After seconds and HTTP dates with a bounded wait', () => {
+    expect(parseRetryAfterMs('60', 0)).toBe(60_000);
+    expect(parseRetryAfterMs('600', 0)).toBe(300_000);
+    expect(parseRetryAfterMs('Thu, 01 Jan 1970 00:01:00 GMT', 0)).toBe(60_000);
+    expect(parseRetryAfterMs('invalid', 0)).toBeNull();
+});
+
+test('retries transient Cloudflare 520 responses', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    let fetchCalls = 0;
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-cloudflare-520',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => {
+            fetchCalls++;
+            if (fetchCalls === 1) {
+                return new Response('origin error', {
+                    status: 520,
+                    headers: {
+                        'cf-ray': 'test-ray',
+                        'retry-after': '0',
+                    },
+                });
+            }
+            return new Response(audio);
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(fetchCalls).toBe(2);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('does not retry non-retryable Cloudflare TLS errors', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-cloudflare-526',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                return new Response('invalid origin certificate', { status: 526 });
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        status: 526,
+        transferAttempt: 1,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+
+    expect(fetchCalls).toBe(1);
+});
+
+test('reports retry context after Cloudflare 520 retries are exhausted', async () => {
+    let fetchCalls = 0;
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'job-cloudflare-520-exhausted',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: async () => {
+                fetchCalls++;
+                return new Response('origin error', {
+                    status: 520,
+                    headers: { 'cf-ray': 'exhausted-ray' },
+                });
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        status: 520,
+        cfRay: 'exhausted-ray',
+        transferAttempt: 3,
+        maxTransferAttempts: 3,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+
+    expect(fetchCalls).toBe(3);
+});
+
+test('falls back to a strict alternate track stream after primary CDN retries are exhausted', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const primary = resolvedTrack({
+        streamUrl: 'https://cdn.test/broken.wav',
+        sourceUrl: 'https://cdn.test/broken.wav',
+    });
+    const alternate = resolvedTrack({
+        streamUrl: 'https://cdn.test/alternate.wav',
+        sourceUrl: 'https://cdn.test/alternate.wav',
+        originalTrackId: 'track1',
+        alternateTrackId: 'alt-track-1',
+        alternateMatchScore: 200,
+        alternateExactIsrc: true,
+    });
+    const alternateCalls = [];
+    const progress = [];
+    let primaryFetches = 0;
+    let alternateFetches = 0;
+
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload(id, quality, options) {
+            alternateCalls.push({ id, quality, track: options.track });
+            return alternate;
+        },
+    };
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-alternate-fallback',
+        config,
+        resolver,
+        track: primary.metadata,
+        fetchImpl: async (url) => {
+            if (String(url) === 'https://cdn.test/broken.wav') {
+                primaryFetches++;
+                return new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                });
+            }
+            if (String(url) === 'https://cdn.test/alternate.wav') {
+                alternateFetches++;
+                return new Response(audio);
+            }
+            return new Response('missing', { status: 404 });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        onProgress: (event) => progress.push(event),
+    });
+
+    expect(primaryFetches).toBe(3);
+    expect(alternateFetches).toBe(1);
+    expect(alternateCalls).toHaveLength(1);
+    expect(alternateCalls[0]).toMatchObject({
+        id: 'track1',
+        quality: 'LOSSLESS',
+    });
+    expect(progress).toContainEqual(
+        expect.objectContaining({
+            alternateSource: true,
+            originalTrackId: 'track1',
+            alternateTrackId: 'alt-track-1',
+            alternateMatchScore: 200,
+            alternateExactIsrc: true,
+        })
+    );
+    expect(result.resolved).toMatchObject({
+        originalTrackId: 'track1',
+        alternateTrackId: 'alt-track-1',
+    });
+    expect(result.relativePath).toBe(path.join('Album Artist', 'Album Title', '01 - Track Title.wav'));
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('falls back to the local yt-dlp service after Tracks and alternate Tracks fail', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const primary = resolvedTrack({
+        streamUrl: 'https://tracks.test/broken.wav',
+        sourceUrl: 'https://tracks.test/broken.wav',
+    });
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 0,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-alternate-candidates',
+            };
+        },
+    };
+    const requests = [];
+    const progress = [];
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-ytdlp-fallback',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+            ytDlpFallbackUrl: 'http://yt-dlp-server:4545',
+            ytDlpFallbackTimeoutMs: 5_000,
+            cdnBackoffBaseMs: 1,
+            cdnBackoffMaxMs: 2,
+        },
+        resolver,
+        track: primary.metadata,
+        fetchImpl: async (url, options = {}) => {
+            requests.push({ url: String(url), options });
+            if (String(url) === 'https://tracks.test/broken.wav') {
+                return new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                });
+            }
+            if (String(url) === 'http://yt-dlp-server:4545/api/fallback-track') {
+                const payload = JSON.parse(options.body);
+                expect(payload).toMatchObject({
+                    artist: 'Track Artist',
+                    title: 'Track Title',
+                    album: 'Album Title',
+                    duration: 2,
+                });
+                return new Response(audio, {
+                    status: 200,
+                    headers: {
+                        'content-type': 'audio/wav',
+                        'x-fallback-provider': 'spotdl',
+                        'x-fallback-query': 'Track Artist - Track Title',
+                    },
+                });
+            }
+            return new Response('missing', { status: 404 });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+        onProgress: (event) => progress.push(event),
+    });
+
+    expect(requests.filter((request) => request.url === 'https://tracks.test/broken.wav')).toHaveLength(3);
+    expect(requests.filter((request) => request.url.includes('/api/fallback-track'))).toHaveLength(1);
+    expect(progress).toContainEqual(
+        expect.objectContaining({
+            ytDlpFallback: true,
+            ytDlpFallbackProvider: 'spotdl',
+        })
+    );
+    expect(result.resolved).toMatchObject({
+        provider: 'yt-dlp-fallback',
+        fallbackSource: 'yt-dlp',
+        fallbackProvider: 'spotdl',
+        fallbackQuery: 'Track Artist - Track Title',
+        metadata: primary.metadata,
+    });
+    expect(result.relativePath).toBe(path.join('Album Artist', 'Album Title', '01 - Track Title.wav'));
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('reports yt-dlp fallback failure without losing Tracks diagnostics', async () => {
+    const primary = resolvedTrack({
+        streamUrl: 'https://tracks.test/broken.wav',
+        sourceUrl: 'https://tracks.test/broken.wav',
+    });
+    const resolver = {
+        async resolveTrackDownload() {
+            return primary;
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 4,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-safe-alternate-match',
+            };
+        },
+    };
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            quality: 'LOSSLESS',
+            jobId: 'job-ytdlp-fallback-fail',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+                ytDlpFallbackUrl: 'http://yt-dlp-server:4545',
+                ytDlpFallbackTimeoutMs: 5_000,
+                cdnBackoffBaseMs: 1,
+                cdnBackoffMaxMs: 2,
+            },
+            resolver,
+            track: primary.metadata,
+            fetchImpl: async (url) => {
+                if (String(url) === 'https://tracks.test/broken.wav') {
+                    return new Response('bad gateway', {
+                        status: 502,
+                        headers: { 'retry-after': '0' },
+                    });
+                }
+                return new Response(
+                    JSON.stringify({ ok: false, error: 'No safe spotDL match.' }),
+                    { status: 409, headers: { 'content-type': 'application/json' } }
+                );
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'YTDLP_FALLBACK_FAILED',
+        status: 409,
+        originalTrackId: 'track1',
+        alternateSearchAttempted: true,
+        alternateCandidatesConsidered: 4,
+        alternateBestMatchScore: 0,
+        alternateReason: 'no-safe-alternate-match',
+        ytDlpFallbackAttempted: true,
+        ytDlpFallbackProvider: 'spotdl',
+    });
+});
+
+test('records alternate search diagnostics when no safe fallback exists', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+
+    const resolver = {
+        async resolveTrackDownload() {
+            return resolvedTrack({
+                streamUrl: 'https://cdn.test/broken.wav',
+                sourceUrl: 'https://cdn.test/broken.wav',
+            });
+        },
+        async resolveAlternateTrackDownload() {
+            return {
+                alternateUnavailable: true,
+                alternateSearchAttempted: true,
+                originalTrackId: 'track1',
+                alternateCandidatesConsidered: 4,
+                alternateBestMatchScore: 0,
+                alternateReason: 'no-safe-alternate-match',
+                alternateSearchError: null,
+            };
+        },
+    };
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            quality: 'LOSSLESS',
+            jobId: 'job-no-safe-alternate',
+            config,
+            resolver,
+            track: resolvedTrack().metadata,
+            fetchImpl: async () =>
+                new Response('bad gateway', {
+                    status: 502,
+                    headers: { 'retry-after': '0' },
+                }),
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({
+        failureCode: 'CDN_FETCH_FAILED',
+        originalTrackId: 'track1',
+        alternateSearchAttempted: true,
+        alternateCandidatesConsidered: 4,
+        alternateBestMatchScore: 0,
+        alternateReason: 'no-safe-alternate-match',
+    });
+});
+
+test('retries a mid-stream socket reset without duplicating partial bytes', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    let fetchCalls = 0;
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        jobId: 'job-stream-retry',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () => {
+            fetchCalls++;
+            if (fetchCalls === 1) {
+                let readCount = 0;
+                const body = new ReadableStream({
+                    pull(controller) {
+                        if (readCount++ === 0) {
+                            controller.enqueue(audio.subarray(0, 1024));
+                            return;
+                        }
+
+                        const error = new Error('socket connection was closed unexpectedly');
+                        error.code = 'ECONNRESET';
+                        controller.error(error);
+                    },
+                });
+                return new Response(body, {
+                    headers: {
+                        'content-length': String(audio.length),
+                    },
+                });
+            }
+
+            return new Response(audio, {
+                headers: {
+                    'content-length': String(audio.length),
+                },
+            });
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(fetchCalls).toBe(2);
+    expect(await fs.readFile(result.finalFile)).toEqual(audio);
+});
+
+test('reports streamed byte progress for server downloads', async () => {
+    const audio = wavBuffer({ durationSeconds: 2 });
+    const progress = [];
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-progress',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+            fetchTimeoutMs: 120000,
+        },
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: async () =>
+            new Response(audio, {
+                headers: {
+                    'content-length': String(audio.length),
+                },
+            }),
+        metadataEmbedder: noOpMetadataEmbedder,
+        onProgress: (event) => progress.push(event),
+    });
+
+    expect(result.action).toBe('published');
+    expect(progress.length).toBeGreaterThan(0);
+    expect(progress.at(-1)).toMatchObject({
+        downloadedBytes: audio.length,
+        totalBytes: audio.length,
+        segmentIndex: 0,
+        segmentCount: 1,
+    });
+});
+
+test('does not add provider-specific origin headers to audio requests', async () => {
+    const calls = [];
+
+    await executeTrackDownload({
+        id: 'track1',
+        quality: 'LOSSLESS',
+        jobId: 'job-no-deezer-origin',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(resolvedTrack({ streamUrl: 'https://cdn.test/audio.wav' })),
+        fetchImpl: async (url, options) => {
+            calls.push({ url: String(url), headers: options.headers });
+            return new Response(wavBuffer({ durationSeconds: 2 }));
+        },
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(calls[0].headers.origin).toBeUndefined();
+    expect(calls[0].headers.referer).toBeUndefined();
+});
+
+test('rejects preview-only tracks before fetching audio', async () => {
+    let fetched = false;
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(
+                resolvedTrack({
+                    isPreview: true,
+                    presentationFlags: { assetPresentation: 'PREVIEW', trackPresentation: 'PREVIEW', isPreview: true },
+                })
+            ),
+            fetchImpl: async () => {
+                fetched = true;
+                return new Response(wavBuffer());
+            },
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({ failureCode: 'PREVIEW_STREAM_REJECTED' });
+
+    expect(fetched).toBe(false);
+});
+
+test('downloads from JSON manifest URLs', async () => {
+    const result = await executeTrackDownload({
+        id: 'track1',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(
+            resolvedTrack({
+                streamUrl: null,
+                manifest: { urls: ['https://cdn.test/audio.wav'] },
+                manifestDetails: null,
+            })
+        ),
+        fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }),
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.validation.extension).toBe('wav');
+});
+
+test('downloads from base64 JSON manifests', async () => {
+    const encodedManifest = Buffer.from(JSON.stringify({ urls: ['https://cdn.test/audio.wav'] }), 'utf8').toString(
+        'base64'
+    );
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(
+            resolvedTrack({
+                streamUrl: null,
+                manifest: encodedManifest,
+                manifestDetails: null,
+            })
+        ),
+        fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }),
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.validation.extension).toBe('wav');
+});
+
+test('downloads DASH MPD initialization and media segments', async () => {
+    const wav = wavBuffer({ durationSeconds: 2 });
+    const mpd = [
+        '<MPD><Period><AdaptationSet mimeType="audio/wav"><Representation id="audio">',
+        '<BaseURL>https://cdn.test/dash/</BaseURL>',
+        '<SegmentTemplate initialization="init.wav" media="seg-$Number$.wav" startNumber="1">',
+        '<SegmentTimeline><S d="1"/></SegmentTimeline>',
+        '</SegmentTemplate></Representation></AdaptationSet></Period></MPD>',
+    ].join('');
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        config: {
+            tempRoot: path.join(root, 'tmp'),
+            downloadRoot: path.join(root, 'music'),
+        },
+        resolver: resolverFor(
+            resolvedTrack({
+                streamUrl: null,
+                manifest: Buffer.from(mpd, 'utf8').toString('base64'),
+                manifestDetails: null,
+            })
+        ),
+        fetchImpl: fetchFor({
+            'https://cdn.test/dash/init.wav': wav.subarray(0, 44),
+            'https://cdn.test/dash/seg-1.wav': wav.subarray(44),
+        }),
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.validation.extension).toBe('wav');
+});
+
+test('rejects duration mismatches that look like previews', async () => {
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack({ duration: 180 })),
+            fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 30 }) }),
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({ failureCode: 'PREVIEW_DURATION_DETECTED' });
+});
+
+test('rejects empty downloads and deletes temp job directory on failure', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            jobId: 'empty-job',
+            config,
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': Buffer.alloc(0) }),
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({ failureCode: 'EMPTY_DOWNLOAD_FILE' });
+
+    await expect(fs.stat(path.join(config.tempRoot, 'empty-job'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('rejects corrupt non-audio downloads', async () => {
+    await expect(
+        executeTrackDownload({
+            id: 'track1',
+            config: {
+                tempRoot: path.join(root, 'tmp'),
+                downloadRoot: path.join(root, 'music'),
+            },
+            resolver: resolverFor(resolvedTrack()),
+            fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': Buffer.from('this is not an audio container') }),
+            metadataEmbedder: noOpMetadataEmbedder,
+        })
+    ).rejects.toMatchObject({ failureCode: 'UNSUPPORTED_AUDIO_CONTAINER' });
+});
+
+test('skips network transfer when an existing final file is already valid', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const finalFile = path.join(config.downloadRoot, 'Album Artist', 'Album Title', '01 - Track Title.wav');
+    await fs.mkdir(path.dirname(finalFile), { recursive: true });
+    await fs.writeFile(finalFile, wavBuffer({ durationSeconds: 2 }));
+
+    const fetchImpl = vi.fn(fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }));
+    const result = await executeTrackDownload({
+        id: 'track1',
+        config,
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl,
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('skipped-existing-valid');
+    expect(result.finalFile).toBe(finalFile);
+    expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+test('falls back to copy/unlink when final rename crosses devices', async () => {
+    const config = {
+        tempRoot: path.join(root, 'tmp'),
+        downloadRoot: path.join(root, 'music'),
+    };
+    const fsOps = {
+        ...fs,
+        async rename(from, to) {
+            if (String(from).endsWith('track.download')) {
+                const error = new Error('cross-device link not permitted');
+                error.code = 'EXDEV';
+                throw error;
+            }
+            return fs.rename(from, to);
+        },
+    };
+
+    const result = await executeTrackDownload({
+        id: 'track1',
+        config,
+        fsOps,
+        resolver: resolverFor(resolvedTrack()),
+        fetchImpl: fetchFor({ 'https://cdn.test/audio.wav': wavBuffer({ durationSeconds: 2 }) }),
+        metadataEmbedder: noOpMetadataEmbedder,
+    });
+
+    expect(result.action).toBe('published');
+    expect(result.publishMethod).toBe('copy-unlink');
+    await expect(fs.stat(result.finalFile)).resolves.toBeTruthy();
+});

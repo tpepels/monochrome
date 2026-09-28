@@ -22,11 +22,18 @@ import { BulkDownloadMethod, modernSettings } from './ModernSettings.js';
 import { SVG_CLOSE } from './icons.ts';
 import { MusicAPI } from './music-api.js';
 import { LyricsManager } from './lyrics.js';
+import { createSelfHostDownloadBridge } from './selfhost/downloads.js';
 
 const downloadTasks = new Map();
 const bulkDownloadTasks = new Map();
 const ongoingDownloads = new Set();
 let downloadNotificationContainer = null;
+
+// SELF-HOST INVARIANT/BOUNDARY: keep fork logic in js/selfhost/downloads.js; adapt only this seam after upstream changes.
+const selfHostDownloads = createSelfHostDownloadBridge({
+    showNotification, addDownloadTask, updateDownloadProgress, completeDownloadTask, dismissDownloadTask,
+    createBulkDownloadNotification, completeBulkDownload, dismissBulkDownloadNotification,
+});
 
 /** Wraps a single {@link WriterEntry}-like object as an AsyncIterable for use with IBulkDownloadWriter.write(). */
 async function* singleWriterEntry(entry) {
@@ -198,7 +205,7 @@ export function showNotification(message, options = {}) {
     );
 }
 
-export function addDownloadTask(trackId, track, _filename, api, abortController) {
+export function addDownloadTask(trackId, track, _filename, api, abortController, { dismissOnly = false } = {}) {
     const container = createDownloadNotification();
 
     const taskEl = document.createElement('div');
@@ -228,12 +235,27 @@ export function addDownloadTask(trackId, track, _filename, api, abortController)
 
     downloadTasks.set(trackId, { taskEl, abortController });
 
-    taskEl.querySelector('.download-cancel').addEventListener('click', () => {
-        abortController.abort();
-        removeDownloadTask(trackId);
-    });
+    const closeButton = taskEl.querySelector('.download-cancel');
+    if (dismissOnly) {
+        closeButton.title = 'Hide download notification';
+        closeButton.setAttribute('aria-label', 'Hide download notification');
+        closeButton.addEventListener('click', () => dismissDownloadTask(trackId));
+    } else {
+        closeButton.addEventListener('click', () => {
+            abortController.abort();
+            removeDownloadTask(trackId);
+        });
+    }
 
     return { taskEl, abortController };
+}
+
+export function dismissDownloadTask(trackId) {
+    const task = downloadTasks.get(trackId);
+    if (!task) return;
+
+    task.taskEl.remove();
+    downloadTasks.delete(trackId);
 }
 
 export function updateDownloadProgress(trackId, progress) {
@@ -744,6 +766,8 @@ export async function downloadTracks(tracks, api, quality, _lyricsManager = null
 }
 
 export async function downloadAlbum(album, tracks, api, quality, _lyricsManager = null) {
+    if (await selfHostDownloads.tryQueueAlbum(album, tracks, quality)) return;
+
     const releaseDateStr =
         album.releaseDate || (tracks[0]?.streamStartDate ? tracks[0].streamStartDate.split('T')[0] : '');
     const releaseDate = releaseDateStr ? new Date(releaseDateStr) : null;
@@ -989,7 +1013,7 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
     }
 }
 
-function createBulkDownloadNotification(type, name, _totalItems) {
+function createBulkDownloadNotification(type, name, _totalItems, { dismissOnly = false } = {}) {
     const container = createDownloadNotification();
 
     const notifEl = document.createElement('div');
@@ -1037,10 +1061,17 @@ function createBulkDownloadNotification(type, name, _totalItems) {
     const abortController = new AbortController();
     bulkDownloadTasks.set(notifEl, { abortController });
 
-    notifEl.querySelector('.download-cancel').addEventListener('click', () => {
-        abortController.abort();
-        removeBulkDownloadTask(notifEl);
-    });
+    const closeButton = notifEl.querySelector('.download-cancel');
+    if (dismissOnly) {
+        closeButton.title = 'Hide download notification';
+        closeButton.setAttribute('aria-label', 'Hide download notification');
+        closeButton.addEventListener('click', () => dismissBulkDownloadNotification(notifEl));
+    } else {
+        closeButton.addEventListener('click', () => {
+            abortController.abort();
+            removeBulkDownloadTask(notifEl);
+        });
+    }
 
     return notifEl;
 }
@@ -1054,6 +1085,11 @@ function createBulkDownloadNotification(type, name, _totalItems) {
  * @param {FfmpegProgress | ProgressMessage | null} progress
  * @returns
  */
+function dismissBulkDownloadNotification(notifEl) {
+    notifEl?.remove();
+    bulkDownloadTasks.delete(notifEl);
+}
+
 function updateBulkDownloadProgress(notifEl, current, total, currentItem, progress = null) {
     /** @type {HTMLElement | null} */
     const progressFill = notifEl.querySelector('.download-progress-fill');
@@ -1169,6 +1205,7 @@ export async function downloadTrackWithMetadata(
         return;
     }
 
+    if (await selfHostDownloads.tryQueueTrack(track, quality, api)) return;
     const controller = abortController || new AbortController();
     // Claim the operation before its first async lookup so rapid repeated clicks
     // cannot start multiple enrichments for the same track.

@@ -2,6 +2,7 @@
 
 import { SVG_RIGHT_ARROW } from './icons';
 import { isIos, isSafari } from './platform-detection.js';
+import { getTracksClientBaseUrl, TRACKS_API_BASE_URL } from './tracks-api.js';
 
 export const apiSettings = {
     STORAGE_KEY: 'monochrome-api-instances-v9',
@@ -79,9 +80,11 @@ export const apiSettings = {
             }
 
             if (!data) {
-                console.error('Failed to load instances from all uptime APIs:', fetchError);
+                if (urls.length > 0) {
+                    console.error('Failed to load instances from all uptime APIs:', fetchError);
+                }
                 this.defaultInstances = {
-                    api: [{ url: 'https://tracks.monochrome.st', version: '2.10' }],
+                    api: [{ url: TRACKS_API_BASE_URL, version: '2.10' }],
                     streaming: [],
                 };
                 this.instancesLoaded = true;
@@ -107,7 +110,7 @@ export const apiSettings = {
             }
 
             if (groupedInstances.api.length === 0) {
-                groupedInstances.api = [{ url: 'https://tracks.monochrome.st', version: '2.10' }];
+                groupedInstances.api = [{ url: TRACKS_API_BASE_URL, version: '2.10' }];
             }
 
             this.defaultInstances = groupedInstances;
@@ -148,7 +151,19 @@ export const apiSettings = {
 
         if (combined.length === 0) return [];
 
-        return combined;
+        // SELF-HOST INVARIANT:
+        // Cached upstream instance data can contain https://tracks.monochrome.st.
+        // Rewrite it at read time so stale localStorage cannot bypass the
+        // same-origin proxy after an upstream rebase or browser refresh.
+        const tracksClientBaseUrl = getTracksClientBaseUrl();
+        return combined.map((instance) => {
+            const normalized = typeof instance === 'string' ? { url: instance } : { ...instance };
+            const url = String(normalized.url || '').replace(/\/+$/, '');
+            if (url === TRACKS_API_BASE_URL && tracksClientBaseUrl !== TRACKS_API_BASE_URL) {
+                normalized.url = tracksClientBaseUrl;
+            }
+            return normalized;
+        });
     },
 
     addUserInstance(type, url) {

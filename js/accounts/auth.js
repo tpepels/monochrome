@@ -1,5 +1,5 @@
 // js/accounts/auth.js
-import { AUTH_BASE_URL, authClient } from './config.js';
+import { AUTH_BASE_URL, AUTH_ENABLED, authClient } from './config.js';
 
 const LEGACY_AUTH_TOKEN_KEY = 'monochrome-auth-token';
 const NATIVE_OAUTH_HANDLED_URLS_KEY = 'monochrome-native-oauth-handled-urls';
@@ -203,6 +203,11 @@ export class AuthManager {
     }
 
     async init() {
+        if (!AUTH_ENABLED) {
+            this.setUser(null);
+            return;
+        }
+
         const params = getOAuthParams();
         if (this.applyOAuthParams(params)) {
             window.history.replaceState({}, '', window.location.pathname);

@@ -1,0 +1,38 @@
+import { expect, test } from 'vitest';
+import { downloadAdminResponse } from './admin-ui.js';
+
+test('serves a standalone download admin page without Monochrome frontend assets', async () => {
+    const response = downloadAdminResponse();
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(html).toContain('Server downloads');
+    expect(html).toContain('/api/downloads');
+    expect(html).toContain('/api/downloads/reset');
+    expect(html).toContain("runBulkAction('retry-failed')");
+    expect(html).toContain("runBulkAction('resume-cancelled')");
+    expect(html).toContain('Retry all failed');
+    expect(html).toContain('Resume all cancelled');
+    expect(html).toContain('Skip track + continue');
+    expect(html).toContain('Publish partial');
+    expect(html).toContain('Retry missing');
+    expect(html).toContain("runJobAction(button, 'skip-track')");
+    expect(html).toContain("runJobAction(button, 'publish-partial')");
+    expect(html).not.toContain('http://192.168.1.200:4545/');
+    expect(html).toContain('Cause code');
+    expect(html).toContain('Alternate search attempted');
+    expect(html).toContain('Alternate candidates');
+    expect(html).toContain('Alternate rejection');
+    expect(html).toContain('Alternate best score');
+    expect(html).toContain('yt-dlp fallback attempted');
+    expect(html).toContain('yt-dlp fallback provider');
+    expect(html).toContain('Fallback audio:');
+    expect(html).toContain('not Tracks lossless');
+    expect(html).toContain('Error details');
+    expect(html).toContain('Copy diagnostics');
+    expect(html).toContain('diagnostic-json');
+    expect(html).toContain('const POLL_MS = 15000;');
+    expect(html).not.toContain('<script src=');
+    expect(html).not.toContain('<link rel="stylesheet"');
+});

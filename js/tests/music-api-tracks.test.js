@@ -9,8 +9,15 @@ vi.mock('../api.js', () => {
             searchAlbums = vi.fn().mockResolvedValue({ items: [] });
             searchPlaylists = vi.fn().mockResolvedValue({ items: [] });
             getStreamUrl = vi.fn().mockResolvedValue({ url: 'https://tidal.com/stream' });
+            getTrackMetadata = vi.fn().mockResolvedValue({
+                id: '553569385',
+                title: 'Fourteen Reveries: 2',
+                artist: { name: 'External Artist' },
+                isrc: 'TESTISRC553569385',
+            });
             getAlbum = vi.fn().mockResolvedValue({ album: {}, tracks: [] });
             getArtist = vi.fn().mockResolvedValue({ name: 'Artist' });
+            getSimilarArtists = vi.fn().mockResolvedValue([]);
             clearCache = vi.fn().mockResolvedValue();
         },
     };
@@ -38,6 +45,16 @@ describe('MusicAPI primary search and streaming integration', () => {
             apiBaseUrl: 'https://api.tidal.com',
             apiToken: 'mock-token',
         });
+    });
+
+    it('passes self-host artwork paths through without TIDAL wrapping', () => {
+        const artwork = '/api/provider/tracks/proxy/mi/166475487139684352/1A01.jpg';
+        const artistArtwork = '/api/provider/tracks/proxy/c/media/166086362720935936/1A01.jpg';
+
+        expect(api.getCoverUrl(artwork, '320')).toBe(artwork);
+        expect(api.getCoverSrcset(artwork)).toBe('');
+        expect(api.getArtistPictureUrl(artistArtwork, '160')).toBe(artistArtwork);
+        expect(api.getArtistPictureSrcset(artistArtwork)).toBe('');
     });
 
     it('uses tracksStreamerAPI as primary search', async () => {
@@ -94,6 +111,39 @@ describe('MusicAPI primary search and streaming integration', () => {
         expect(results.tracks.items[0].title).toBe('Apple Song');
     });
 
+    it('never sends an unresolved short external ID directly to the Tracks stream endpoint', async () => {
+        const metadata = {
+            id: '553569385',
+            title: 'Fourteen Reveries: 2',
+            artist: { name: 'External Artist' },
+            isrc: 'TESTISRC553569385',
+        };
+        api.tidalAPI.getTrackMetadata.mockResolvedValueOnce(metadata);
+
+        const resolveSpy = vi.spyOn(api.tracksStreamerAPI, 'resolveTrackStream').mockResolvedValueOnce(null);
+        const directTracksSpy = vi.spyOn(api.tracksStreamerAPI, 'getStreamUrl');
+        api.tidalAPI.getStreamUrl.mockResolvedValueOnce({
+            url: 'https://legacy.example/fallback.flac',
+            provider: 'legacy',
+        });
+
+        const result = await api.getStreamUrl('553569385', 'LOSSLESS');
+
+        expect(api.tidalAPI.getTrackMetadata).toHaveBeenCalledWith('553569385');
+        expect(resolveSpy).toHaveBeenCalledWith(
+            '553569385',
+            'LOSSLESS',
+            expect.objectContaining({ track: metadata })
+        );
+        expect(directTracksSpy).not.toHaveBeenCalled();
+        expect(api.tidalAPI.getStreamUrl).toHaveBeenCalledWith(
+            '553569385',
+            'LOSSLESS',
+            expect.objectContaining({ track: metadata })
+        );
+        expect(result.url).toBe('https://legacy.example/fallback.flac');
+    });
+
     it('uses tracksStreamerAPI as primary streaming for any track', async () => {
         const resolveSpy = vi.spyOn(api.tracksStreamerAPI, 'resolveTrackStream').mockResolvedValueOnce({
             url: 'https://tracks.monochrome.st/track/101',
@@ -133,6 +183,41 @@ describe('MusicAPI primary search and streaming integration', () => {
 
         expect(getAlbumSpy).toHaveBeenCalledWith('155142458219433984');
         expect(result.album.title).toBe('RAM');
+    });
+
+    it('recognizes a Tracks snowflake artist after a hard reload', async () => {
+        const mockArtist = {
+            id: '159504705419313152',
+            artistId: '159504705419313152',
+            name: 'Ichiko Aoba',
+            tracks: [],
+            similar: [],
+        };
+
+        const tracksSpy = vi.spyOn(api.tracksStreamerAPI, 'getArtist').mockResolvedValueOnce(mockArtist);
+        const tidalSpy = vi.spyOn(api.tidalAPI, 'getArtist');
+
+        const result = await api.getArtist('159504705419313152');
+
+        expect(tracksSpy).toHaveBeenCalledWith('159504705419313152');
+        expect(tidalSpy).not.toHaveBeenCalled();
+        expect(result.name).toBe('Ichiko Aoba');
+    });
+
+    it('does not send Tracks snowflake similar-artist requests to TIDAL', async () => {
+        vi.spyOn(api.tracksStreamerAPI, 'getArtist').mockResolvedValueOnce({
+            id: '159504705419313152',
+            artistId: '159504705419313152',
+            name: 'Ichiko Aoba',
+            tracks: [],
+            similar: [],
+        });
+        const tidalSpy = vi.spyOn(api.tidalAPI, 'getSimilarArtists');
+
+        const similar = await api.getSimilarArtists('159504705419313152');
+
+        expect(similar).toEqual([]);
+        expect(tidalSpy).not.toHaveBeenCalled();
     });
 
     it('fetches artists via tracksStreamerAPI when id has tracks provider', async () => {
