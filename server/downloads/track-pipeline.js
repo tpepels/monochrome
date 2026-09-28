@@ -732,6 +732,140 @@ async function downloadResolvedTrackToTemp(
     });
 }
 
+async function downloadYtDlpFallbackToTemp(
+    originalResolved,
+    tempFile,
+    {
+        track = null,
+        fallbackBaseUrl = null,
+        fallbackTimeoutMs = 10 * 60 * 1000,
+        fetchImpl = fetch,
+        fsOps = fs,
+        signal = null,
+        onProgress = null,
+    } = {}
+) {
+    const baseUrl = String(fallbackBaseUrl || '').trim().replace(/\/+$/, '');
+    if (!baseUrl) return null;
+
+    const metadata = originalResolved?.metadata || track || {};
+    const artist = getArtistName(metadata);
+    const title = getTrackTitle(metadata);
+    const album = getAlbumTitle(metadata);
+
+    if (!artist || artist === 'Unknown Artist' || !title || title === 'Unknown Title') {
+        return null;
+    }
+
+    const endpoint = baseUrl + '/api/fallback-track';
+    onProgress?.({
+        ytDlpFallback: true,
+        ytDlpFallbackProvider: 'spotdl',
+        ytDlpFallbackMessage: 'Trying yt-dlp fallback',
+    });
+
+    const controller = new AbortController();
+    const onAbort = () =>
+        controller.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener?.('abort', onAbort, { once: true });
+
+    const timeout = setTimeout(() => {
+        controller.abort(
+            pipelineError(
+                'yt-dlp fallback timed out after ' + Math.round(fallbackTimeoutMs / 1000) + ' seconds',
+                'YTDLP_FALLBACK_FAILED',
+                { fallbackUrl: endpoint }
+            )
+        );
+    }, fallbackTimeoutMs);
+
+    let response;
+    try {
+        response = await fetchImpl(endpoint, {
+            method: 'POST',
+            headers: {
+                accept: 'audio/*,application/json;q=0.5',
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                artist,
+                title,
+                album,
+                duration: Number(originalResolved?.duration || metadata?.duration || 0) || null,
+            }),
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (signal?.aborted) throw signal.reason || error;
+        const reason = controller.signal.reason;
+        if (controller.signal.aborted && reason?.failureCode === 'YTDLP_FALLBACK_FAILED') throw reason;
+        throw pipelineError(
+            'yt-dlp fallback request failed: ' + (error?.message || String(error)),
+            'YTDLP_FALLBACK_FAILED',
+            { fallbackUrl: endpoint, cause: error }
+        );
+    } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.('abort', onAbort);
+    }
+
+    if (!response.ok) {
+        let detail = null;
+        try {
+            const body = await response.json();
+            detail = body?.error || body?.detail || null;
+        } catch {
+            detail = await response.text().catch(() => '');
+        }
+        throw pipelineError(
+            'yt-dlp fallback unavailable: ' + (detail || ('HTTP ' + response.status)),
+            'YTDLP_FALLBACK_FAILED',
+            {
+                status: response.status,
+                fallbackUrl: endpoint,
+                fallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+            }
+        );
+    }
+
+    await fsOps.rm(tempFile, { force: true }).catch(() => {});
+    await writeResponseBodyToFile(response, tempFile, {
+        fsOps,
+        append: false,
+        onProgress: (progress) =>
+            onProgress?.({
+                ...progress,
+                ytDlpFallback: true,
+                ytDlpFallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+            }),
+    });
+
+    return {
+        ...originalResolved,
+        provider: 'yt-dlp-fallback',
+        providerInstance: null,
+        providerErrors: [],
+        streamUrl: null,
+        sourceUrl: null,
+        proxiedStreamUrl: null,
+        manifest: null,
+        manifestKind: 'fallback',
+        manifestMimeType: response.headers.get('content-type') || null,
+        manifestDetails: inspectManifest(null),
+        dash: null,
+        segments: [],
+        urls: [],
+        decryptionKey: null,
+        keyId: null,
+        mediaMimeType: response.headers.get('content-type') || 'audio/ogg',
+        externalStreamType: 'fallback',
+        qualityDisplay: 'yt-dlp fallback',
+        fallbackSource: 'yt-dlp',
+        fallbackProvider: response.headers.get('x-fallback-provider') || 'spotdl',
+        fallbackQuery: response.headers.get('x-fallback-query') || (artist + ' - ' + title),
+    };
+}
 function assertNotPreview(resolved) {
     const flags = resolved.presentationFlags || {};
     const values = [
