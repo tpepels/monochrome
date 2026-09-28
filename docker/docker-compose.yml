@@ -44,6 +44,8 @@ services:
             DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS: ${DOWNLOAD_MAINTENANCE_LOCK_TIMEOUT_MS:-30000}
             DOWNLOAD_TRANSIENT_MIN_AGE_MS: ${DOWNLOAD_TRANSIENT_MIN_AGE_MS:-900000}
             TRACKS_API_BASE_URL: ${TRACKS_API_BASE_URL:-https://tracks.monochrome.st}
+            YTDLP_FALLBACK_URL: ${YTDLP_FALLBACK_URL:-}
+            YTDLP_FALLBACK_TIMEOUT_MS: ${YTDLP_FALLBACK_TIMEOUT_MS:-600000}
         volumes:
             - '${MONOCHROME_MUSIC_DIR:-../music}:/data/music'
             - monochrome_download_tmp:/tmp/monochrome-downloads
