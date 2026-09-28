@@ -1,5 +1,5 @@
 import { getProxyUrl } from '../../js/proxy-utils.js';
-import { TRACKS_API_BASE_URL, TracksStreamerAPI } from '../../js/tracks-api.js';
+import { TRACKS_API_BASE_URL, TracksStreamerAPI, isTracksSnowflake } from '../../js/tracks-api.js';
 
 function normalizeQuality(quality) {
     const normalized = String(quality || '').trim().toUpperCase();
@@ -441,9 +441,38 @@ export class MonochromeResolverFacade {
 
     async resolveAlbum(albumId, { album = null, tracks = null } = {}) {
         let resolvedAlbum = album;
-        let rawTracks = tracks;
+        let rawTracks = Array.isArray(tracks) ? tracks : null;
 
-        if (!resolvedAlbum || !Array.isArray(rawTracks) || rawTracks.length === 0) {
+        const nativeReleaseId = String(
+            album?.tracksReleaseId ||
+                (album?.provider === 'tracks' ? album?.releaseId || album?.id : '') ||
+                (isTracksSnowflake(albumId) ? albumId : '')
+        ).replace(/^tracks:(?:album:)?/, '');
+
+        if (nativeReleaseId) {
+            let response;
+            try {
+                response = await this.tracksApi.getAlbum(nativeReleaseId);
+            } catch (cause) {
+                const error = new Error(
+                    `Could not verify canonical Tracks release before download: ${nativeReleaseId}`
+                );
+                error.failureCode = 'RESOLVER_FETCH_FAILED';
+                error.cause = cause;
+                throw error;
+            }
+
+            if (!response?.album || !Array.isArray(response?.tracks)) {
+                const error = new Error(
+                    `Canonical Tracks release response is incomplete: ${nativeReleaseId}`
+                );
+                error.failureCode = 'RESOLVER_FETCH_FAILED';
+                throw error;
+            }
+
+            resolvedAlbum = response.album;
+            rawTracks = response.tracks;
+        } else if (!resolvedAlbum || !rawTracks?.length) {
             const response = await this.tracksApi.getAlbum(albumId);
             resolvedAlbum = response.album;
             rawTracks = response.tracks || [];
@@ -455,6 +484,32 @@ export class MonochromeResolverFacade {
             downloadOrder: trackOrderInfo(track, index, rawTracks || []),
         }));
 
+        const declaredTrackCount = Number(
+            normalizedAlbum?.numberOfTracks ??
+                normalizedAlbum?.trackCount ??
+                normalizedAlbum?.numberOfItems ??
+                0
+        );
+        if (
+            Number.isFinite(declaredTrackCount) &&
+            declaredTrackCount > 0 &&
+            normalizedTracks.length !== declaredTrackCount
+        ) {
+            const error = new Error(
+                `Album track list is incomplete: resolved ${normalizedTracks.length} of ${declaredTrackCount} tracks`
+            );
+            error.failureCode = 'RESOLVER_FETCH_FAILED';
+            error.resolvedTrackCount = normalizedTracks.length;
+            error.expectedTrackCount = declaredTrackCount;
+            throw error;
+        }
+
+        if (normalizedTracks.length === 0) {
+            const error = new Error('Album has no resolved tracks');
+            error.failureCode = 'RESOLVER_FETCH_FAILED';
+            throw error;
+        }
+
         return {
             type: 'album',
             provider: 'monochrome',
@@ -464,7 +519,7 @@ export class MonochromeResolverFacade {
             tracks: normalizedTracks,
             cover: normalizedAlbum?.cover || null,
             coverUrl: coverUrlFromId(normalizedAlbum?.cover),
-            totalTracks: normalizedAlbum?.numberOfTracks ?? normalizedTracks.length,
+            totalTracks: declaredTrackCount > 0 ? declaredTrackCount : normalizedTracks.length,
             totalDiscs:
                 normalizedAlbum?.numberOfVolumes ||
                 Math.max(1, ...normalizedTracks.map((track) => track.downloadOrder.discNumber || 1)),
